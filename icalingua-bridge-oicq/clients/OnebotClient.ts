@@ -253,16 +253,17 @@ export default class extends EventEmitter<{
             //群名称
             group_name: string
             //群备注
-            group_memo: string
+            group_memo?: string
+            group_remark?: string
             //群创建时间
-            group_create_time: number
+            group_create_time?: number
             //群等级
-            group_level: number
+            group_level?: number
             //成员数
-            member_count: number
+            member_count?: number
             //最大成员数（群容量）
-            max_member_count: number
-        }>('get_group_info', { group_id, no_cache })
+            max_member_count?: number
+        }>('get_group_info', { group_id: String(group_id), no_cache })
 
     public sendGroupMessage = (group_id: number, message: Sendable) =>
         this.callApi<{
@@ -316,10 +317,10 @@ export default class extends EventEmitter<{
     public setGroupAddRequest = (flag: string, approve = true, sub_type: 'add' | 'invite' = 'add', reason = '') =>
         this.callApi('set_group_add_request', { flag, approve, sub_type, reason })
     public deleteMessage = (message_id: number) => this.callApi('delete_msg', { message_id })
-    public getGroupFileUrl = (group_id: number, file_id: string, busid: number) =>
+    public getGroupFileUrl = (group_id: number, file_id: string, _busid?: number) =>
         this.callApi<{
             url: string
-        }>('get_group_file_url', { group_id, file_id, busid })
+        }>('get_group_file_url', { group_id: String(group_id), file_id })
     public getPrivateFileUrl = (file_id: string) =>
         this.callApi<{
             url: string
@@ -418,8 +419,9 @@ export default class extends EventEmitter<{
         this.callApi('set_group_ban', { group_id, user_id, duration })
     public setGroupWholeBan = (group_id: number, enable: boolean) =>
         this.callApi('set_group_whole_ban', { group_id, enable })
-    public setGroupAnonymousBan = (group_id: number, anonymous_flag: string, duration: number) =>
-        this.callApi('set_group_anonymous_ban', { group_id, anonymous_flag, duration })
+    public setGroupAnonymousBan = (_group_id: number, _anonymous_flag: string, _duration: number) => {
+        // NapCat 未注册 set_group_anonymous_ban 接口，直接忽略，避免 API not found 报错
+    }
     public setGroupKick = (group_id: number, user_id: number, reject_add_request = false) =>
         this.callApi('set_group_kick', { group_id, user_id, reject_add_request })
     public setGroupLeave = (group_id: number, is_dismiss = true) =>
@@ -427,17 +429,15 @@ export default class extends EventEmitter<{
     public getGroupMessageHistory = (group_id: number, message_seq?: number) =>
         this.callApi<{
             messages: GroupMessage[]
-        }>('get_group_msg_history', { group_id, message_seq, reverseOrder: true })
+        }>('get_group_msg_history', { group_id: String(group_id), message_seq: message_seq != null ? String(message_seq) : undefined, reverseOrder: true })
     public getPrivateMessageHistory = (user_id: number, message_seq?: number) =>
         this.callApi<{
             messages: PrivateMessage[]
-        }>('get_friend_msg_history', { user_id, message_seq, reverseOrder: true })
-    public setGroupRemark = (group_id: number, remark: string) => {
-        // not implemented
-    }
-    public setFriendRemark = (user_id: number, remark: string) => {
-        // not implemented
-    }
+        }>('get_friend_msg_history', { user_id: String(user_id), message_seq: message_seq != null ? String(message_seq) : undefined, reverseOrder: true })
+    public setGroupRemark = (group_id: number, remark: string) =>
+        this.callApi('set_group_remark', { group_id: String(group_id), remark })
+    public setFriendRemark = (user_id: number, remark: string) =>
+        this.callApi('set_friend_remark', { user_id: String(user_id), remark })
     public sendFriendPoke = (user_id: number) => this.callApi('send_poke', { user_id })
     public sendGroupPoke = (group_id: number, user_id: number) => this.callApi('send_poke', { user_id, group_id })
     public getCookies = (domain: string) =>
@@ -462,24 +462,24 @@ export default class extends EventEmitter<{
         file_id: string,
         current_parent_directory: string,
         target_parent_directory: string,
-    ) => this.callApi('move_group_file', { group_id, file_id, current_parent_directory, target_parent_directory })
+    ) => this.callApi('move_group_file', { group_id: String(group_id), file_id, current_parent_directory, target_parent_directory })
     public gfsRename = (group_id: number, file_id: string, current_parent_directory: string, new_name: string) =>
-        this.callApi('rename_group_file', { group_id, file_id, current_parent_directory, new_name })
+        this.callApi('rename_group_file', { group_id: String(group_id), file_id, current_parent_directory, new_name })
     public gfsUpload = (group_id: number, file: string, name: string, folder_id: string) =>
-        this.callApi('upload_group_file', { group_id, file, name, folder_id })
+        this.callApi('upload_group_file', { group_id: String(group_id), file, name, folder_id })
     public gfsMkdir = (group_id: number, folder_name: string) =>
-        this.callApi('create_group_file_folder', { group_id, folder_name })
+        this.callApi('create_group_file_folder', { group_id: String(group_id), folder_name })
     public gfsDeleteFile = (group_id: number, file_id: string) =>
-        this.callApi('delete_group_file', { group_id, file_id })
+        this.callApi('delete_group_file', { group_id: String(group_id), file_id })
     public gfsDeleteFolder = (group_id: number, folder_id: string) =>
-        this.callApi('delete_group_folder', { group_id, folder_id })
+        this.callApi('delete_group_folder', { group_id: String(group_id), folder_id })
     public gfsDf = (group_id: number) =>
         this.callApi<{
             file_count: 0
             limit_count: 0
             used_space: 0
             total_space: 0
-        }>('get_group_file_system_info', { group_id })
+        }>('get_group_file_system_info', { group_id: String(group_id) })
     public gfsListRoot = (group_id: number) =>
         this.callApi<{
             files: [
@@ -509,7 +509,7 @@ export default class extends EventEmitter<{
                     total_file_count: 'string'
                 },
             ]
-        }>('get_group_root_files', { group_id })
+        }>('get_group_root_files', { group_id: String(group_id), file_count: 11451419 })
     public gfsListDir = (group_id: number, folder_id: string) =>
         this.callApi<{
             files: [
@@ -539,9 +539,9 @@ export default class extends EventEmitter<{
                     total_file_count: 'string'
                 },
             ]
-        }>('get_group_files_by_folder', { group_id, folder_id, file_count: 11451419 })
+        }>('get_group_files_by_folder', { group_id: String(group_id), folder_id, file_count: 11451419 })
     public gfsDownloadUrl = (group_id: number, file_id: string) =>
         this.callApi<{
             url: 'string'
-        }>('get_group_file_url', { group_id, file_id })
+        }>('get_group_file_url', { group_id: String(group_id), file_id })
 }
