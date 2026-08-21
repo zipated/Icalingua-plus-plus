@@ -346,6 +346,14 @@ export default class extends EventEmitter<{
             ]
         }>('get_forward_msg', { message_id })
     public sendGroupSign = (group_id: number) => this.callApi('send_group_sign', { group_id })
+    public clickInlineKeyboardButton = (group_id: number, bot_appid: number, button_id: string, callback_data: string, msg_seq: number) =>
+        this.callApi('click_inline_keyboard_button', {
+            group_id: String(group_id),
+            bot_appid: String(bot_appid),
+            button_id: String(button_id),
+            callback_data: String(callback_data),
+            msg_seq: String(msg_seq),
+        })
     public getGroupList = (no_cache = false) =>
         this.callApi<Awaited<ReturnType<typeof this.getGroupInfo>>[]>('get_group_list', { no_cache })
     public getStrangerInfo = (user_id: number, no_cache = false) =>

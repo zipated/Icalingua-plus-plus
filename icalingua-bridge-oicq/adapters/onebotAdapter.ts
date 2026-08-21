@@ -848,8 +848,14 @@ const adapter: typeof oicqAdapter = {
     async sendGroupSign(gin: number) {
         await bot.sendGroupSign(gin)
     },
-    sendButtonCallback(groupId: number, msgSeq: number, appid: number, id: string, data: string): any {
-        clients.messageError('暂不支持此功能')
+    async sendButtonCallback(groupId: number, msgSeq: number, appid: number, id: string, data: string): Promise<void> {
+        try {
+            await bot.clickInlineKeyboardButton(groupId, appid, id, data, msgSeq)
+        } catch (e) {
+            // NapCat 的 click_inline_keyboard_button 仅支持群聊（硬编码 chatType:2），
+            // 私聊及失败情况统一提示不支持，避免暴露底层 API 错误。
+            clients.messageError('暂不支持此功能')
+        }
     },
     async getGroups(resolve) {
         const groups = await bot.getGroupList()
