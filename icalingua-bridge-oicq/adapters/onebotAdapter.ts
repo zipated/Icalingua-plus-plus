@@ -139,7 +139,7 @@ const attachEventHandler = () => {
         }
         const now = new Date(data.time * 1000)
         const groupId = data.message_type === 'group' ? data.group_id : undefined
-        const nonSelfId = data.user_id === uin ? data.target_id : data.user_id
+        const nonSelfId = data.user_id === uin ? (data.target_id || data.user_id) : data.user_id
         const senderId = data.sender.user_id
         let roomId = groupId ? -groupId : nonSelfId
         if (await storage.isChatIgnored(roomId)) return
@@ -155,7 +155,7 @@ const attachEventHandler = () => {
             } catch (e) {
                 console.log('无法 getStrangerInfo', e)
             }
-            senderName = info.remark || (data.sender as FriendInfo).remark || info.nickname || data.sender.nickname
+            senderName = (info?.remark || (data.sender as FriendInfo).remark || info?.nickname || data.sender.nickname)
         }
         const group = groupId ? await bot.getGroupInfo(groupId) : null
         let roomName = groupId ? group.group_name : senderName
@@ -862,17 +862,17 @@ const adapter: typeof oicqAdapter = {
         const groupsAll: Array<GroupInfo & { sc: string }> = groups.map((it) => ({
             group_id: it.group_id,
             group_name: it.group_name,
-            group_remark: '',
+            group_remark: it.group_remark || it.group_memo || '',
             shutup_time_me: 0,
-            grade: it.group_level,
-            create_time: it.group_create_time,
+            grade: it.group_level || 0,
+            create_time: it.group_create_time || 0,
             active_member_count: 0,
             last_join_time: 0,
             last_sent_time: 0,
             max_admin_count: 0,
             owner_id: 0,
-            max_member_count: it.max_member_count,
-            member_count: it.member_count,
+            max_member_count: it.max_member_count || 0,
+            member_count: it.member_count || 0,
             shutup_time_whole: 0,
             update_time: 0,
             sc: (it.group_name + it.group_id).toUpperCase(),
@@ -1210,7 +1210,7 @@ const adapter: typeof oicqAdapter = {
     async getFriendInfo(user_id: number): Promise<FriendInfo> {
         const data = await bot.getStrangerInfo(user_id)
         return {
-            remark: data.nickname,
+            remark: data.remark || data.nickname,
             sex: data.sex as Gender,
             user_id: data.user_id,
             age: data.age,
@@ -1337,17 +1337,17 @@ const adapter: typeof oicqAdapter = {
         await resolve({
             group_id: it.group_id,
             group_name: it.group_name,
-            group_remark: '',
+            group_remark: it.group_remark || it.group_memo || '',
             shutup_time_me: 0,
-            grade: it.group_level,
-            create_time: it.group_create_time,
+            grade: it.group_level || 0,
+            create_time: it.group_create_time || 0,
             active_member_count: 0,
             last_join_time: 0,
             last_sent_time: 0,
             max_admin_count: 0,
             owner_id: 0,
-            max_member_count: it.max_member_count,
-            member_count: it.member_count,
+            max_member_count: it.max_member_count || 0,
+            member_count: it.member_count || 0,
             shutup_time_whole: 0,
             update_time: 0,
         })
