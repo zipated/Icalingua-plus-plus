@@ -765,7 +765,7 @@ var Q = ({ socket: t }) => {
             });
             return;
         }
-        window['download'] ? window['download'](a.url, a.name, undefined, saveAs) : console.log('error', a);
+        window['download'] ? window['download'](a.url, a.name || u.name, undefined, saveAs) : console.log('error', a);
         if (!saveAs) {
             y.success({
                 message: "已发送下载任务",

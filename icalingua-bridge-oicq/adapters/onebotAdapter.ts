@@ -1767,8 +1767,8 @@ const adapter: typeof oicqAdapter = {
                 ),
             ]
         }
-        const download = (fid) => {
-            return bot.gfsDownloadUrl(gid, fid)
+        const download = (fid: string, name?: string) => {
+            return bot.gfsDownloadUrl(gid, fid).then((res) => ({ url: res.url, name }))
         }
         return {
             gid,
@@ -1784,11 +1784,20 @@ const adapter: typeof oicqAdapter = {
                     await fsP.writeFile(p, file as any)
                     file = p
                 }
-                await bot.gfsUpload(gid, file, pid, name)
+                await bot.gfsUpload(gid, file, name, pid || '/')
                 if (file.startsWith('/app/.config/QQ/NapCat/temp')) {
                     await fsP.unlink(file)
                 }
             },
+            mv: (fid: string, dirId: string) => bot.gfsMove(gid, fid, '/', dirId),
+            rm: async (fid: string) => {
+                try {
+                    await bot.gfsDeleteFile(gid, fid)
+                } catch {
+                    await bot.gfsDeleteFolder(gid, fid)
+                }
+            },
+            rename: (fid: string, name: string) => bot.gfsRename(gid, fid, '/', name),
             download,
         } as any
     },
