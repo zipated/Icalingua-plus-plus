@@ -135,6 +135,44 @@ const scheduleAsyncSilkDecode = (roomId: number, message: Message, url: string, 
     })
 }
 
+/**
+ * 构造符合前端 vac-mod `parseJsonCard` 期望的合并转发卡片 JSON。
+ *
+ * 前提：NapCat 需开启 `parseMultMsg=true`（见 onebot11.json / config.ts）。
+ * 开启后 `multiForwardMsgElement`（msg.ts）会把内层消息内联进 forward 段的
+ * `data.content`，Icalingua 才能拿到转发正文并合成预览卡片；若未开启（false），
+ * forward 段只有数字 id、无内容，本补丁不处理该情况（保持原行为：不显示预览）。
+ *
+ * 前端 `FormatMessage.vue` 用 `hasForwardCard = Boolean(code)` 决定是否渲染卡片，
+ * 卡片内容由 `parseForwardCard` 从 `meta.detail.news` 提取，点击时由
+ * `parseForwardResource` 取 `meta.detail.resid`（= NapCat 上报的数字 id）走
+ * `get_forward_msg({ id })` 的数字分支拉取完整详情。
+ *
+ * - `resid`/`uniseq`: NapCat 上报的 forward segment id（数字字符串）
+ * - `messages`: 内嵌消息列表，用于生成卡片预览正文 news（最多取前 12 条）
+ */
+const buildNapCatForwardCard = (forwardId: string, messages?: Message[]): string => {
+    const news = (messages ?? [])
+        .map((item) => item.content)
+        .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
+        .slice(0, 12)
+        .map((text) => ({ text }))
+    const payload = {
+        app: 'com.tencent.multimsg',
+        desc: '聊天记录',
+        meta: {
+            detail: {
+                resid: forwardId,
+                uniseq: `${forwardId}`,
+                ...(news.length ? { source: '聊天记录', news } : {}),
+                summary: `${news.length ? news.length : 0}条聊天记录`,
+            },
+        },
+        prompt: '聊天记录',
+    }
+    return JSON.stringify(payload)
+}
+
 const createProcessMessage = (adapter: typeof oicqAdapter) => {
     const processMessage = async (
         oicqMessage: MessageElemPlus[],
@@ -785,12 +823,14 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                     case 'forward':
                         lastMessage.content += '[Forward multiple messages]'
                         message.content = `[Forward: ${(m as any).data.id}]`
-                        if (Array.isArray((m as any).data.content)) {
+                        const forwardId = (m as any).data.id
+                        const forwardContent = (m as any).data.content
+                        if (Array.isArray(forwardContent)) {
                             try {
                                 const messages = []
-                                for (let i = 0; i < (m as any).data.content.length; i++) {
-                                    const data = (m as any).data.content[i]
-                                    const message: Message = {
+                                for (let i = 0; i < forwardContent.length; i++) {
+                                    const data = forwardContent[i]
+                                    const innerMessage: Message = {
                                         senderId: data.sender.user_id,
                                         username: data.sender.nickname,
                                         content: '',
@@ -801,10 +841,10 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                                         files: [],
                                         bubble_id: 0,
                                     }
-                                    await processMessage(data.content || (data as any).message, message, {})
-                                    messages.push(message)
+                                    await processMessage(data.content || (data as any).message, innerMessage, {})
+                                    messages.push(innerMessage)
                                 }
-                                message.code = JSON.stringify(messages)
+                                message.code = buildNapCatForwardCard(forwardId, messages)
                             } catch (e) {
                                 message.content += `\n[内层消息解析失败: ${e.message}]`
                             }
