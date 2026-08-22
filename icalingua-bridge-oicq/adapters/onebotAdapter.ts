@@ -38,6 +38,7 @@ import {
     splitContentByMediaOrder,
 } from '../utils/messageMediaOrder'
 import formatDate from '../utils/formatDate'
+import sleep from '../utils/sleep'
 import { Socket } from 'socket.io'
 import SendMessageParams from '@icalingua/types/SendMessageParams'
 import crypto from 'crypto'
@@ -55,6 +56,8 @@ let storage: StorageProvider
 let uin: number
 let bkn: number = 0
 let nickname: string
+let isAutoFetching = false
+let stopFetching = false
 
 // 群成员信息缓存
 const MEMBER_CACHE_TTL = 5 * 60 * 1000 // 5分钟
@@ -1394,10 +1397,18 @@ const adapter: typeof oicqAdapter = {
         const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
         let reachedMinDate = false
         while (true) {
+            if (stopFetching) {
+                stopFetching = false
+                break
+            }
             try {
+                // NapCat 的 message_seq 是纯数字；客户端右键“获取历史消息”传来的是 oicq 风格 base64 buffer id，
+                // Number() 会得到 NaN。解析失败时传 undefined，从最新一页开始拉取
+                const parsedSeq = Number(messageId)
+                const messageSeq = Number.isInteger(parsedSeq) && parsedSeq > 0 ? parsedSeq : undefined
                 const history = await (roomId > 0
-                    ? bot.getPrivateMessageHistory(roomId, Number(messageId))
-                    : bot.getGroupMessageHistory(-roomId, Number(messageId)))
+                    ? bot.getPrivateMessageHistory(roomId, messageSeq)
+                    : bot.getGroupMessageHistory(-roomId, messageSeq))
                 const batchMessages: Message[] = []
                 for (let i = 0; i < history.messages.length; i++) {
                     const data = history.messages[i]
@@ -1446,21 +1457,18 @@ const adapter: typeof oicqAdapter = {
                     }
                 }
                 // 检查第一条消息是否已存在（在存储之前检查）
-                const firstOwnMsg =
-                    roomId < 0
-                        ? batchMessages[0] //群的话只要第一条消息就行
-                        : batchMessages.find((e) => e.senderId == uin)
-                const firstMsgExists = firstOwnMsg && (await storage.getMessage(roomId, firstOwnMsg._id as string))
+                const firstMsg = batchMessages[0]
+                const firstMsgExists = firstMsg && (await storage.getMessage(roomId, firstMsg._id as string))
                 // 边拉边存：每批消息立即存入数据库
                 if (batchMessages.length > 0) {
                     await storage.addMessages(roomId, batchMessages)
                     totalCount += batchMessages.length
                 }
                 if (reachedMinDate) break
-                if (history.messages.length < 2 || batchMessages.length === 0) break
+                if (history.messages.length === 0 || batchMessages.length === 0) break
                 messageId = batchMessages[0]._id as string
                 //todo 所有消息都过一遍，数据库里面都有才能结束
-                if (!firstOwnMsg || firstMsgExists) break
+                if (firstMsgExists) break
             } catch (e) {
                 console.log(e)
                 clients.messageError('错误：' + e.message)
@@ -1474,8 +1482,34 @@ const adapter: typeof oicqAdapter = {
             .then((messages) => clients.setMessages(roomId, messages))
     },
 
+    stopFetchingHistory() {
+        stopFetching = true
+    },
     async fetch7DaysHistory() {
-        clients.messageError('暂不支持该操作')
+        if (isAutoFetching) return
+        console.log('正在获取历史消息')
+        const rooms = await storage.getAllRooms()
+        // 先私聊后群聊，与 oicq 适配器保持一致
+        // NapCat 没有批量查询群 seq/未读的接口（OidbSvc.0x88d 不可用），直接从每个会话最新一页开始拉取
+        const now = Date.now() - 3000
+        const dmRoomIds = rooms
+            .filter((e) => e.roomId > 0 && now - e.utime <= 1000 * 60 * 60 * 24 * 7)
+            .map((e) => e.roomId)
+        const groupRoomIds = rooms
+            .filter((e) => e.roomId < 0 && now - e.utime <= 1000 * 60 * 60 * 24 * 7)
+            .map((e) => e.roomId)
+        isAutoFetching = true
+        for (const roomId of [...dmRoomIds, ...groupRoomIds]) {
+            if (stopFetching) {
+                stopFetching = false
+                break
+            }
+            await adapter.fetchHistory('', roomId, 0)
+            await sleep(100)
+        }
+        isAutoFetching = false
+        clients.messageSuccess('历史消息获取完成')
+        console.log('历史消息获取完成')
     },
     async getCookies(domain: any, resolve) {
         const res = await bot.getCookies(domain)

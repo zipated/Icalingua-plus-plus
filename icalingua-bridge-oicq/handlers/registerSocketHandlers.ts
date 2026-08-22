@@ -31,6 +31,7 @@ export default (io: Server, socket: Socket, adapter: typeof oicqAdapter) => {
     socket.on('hideMessage', adapter.hideMessage)
     socket.on('fetchHistory', adapter.fetchHistory)
     socket.on('fetch7DaysHistory', adapter.fetch7DaysHistory)
+    socket.on('stopFetchingHistory', adapter.stopFetchingHistory)
     socket.on(
         'fetchMessages',
         (roomId: number, options: MessagePageOptions, resolve: (value: Message[] | PromiseLike<Message[]>) => void) =>

@@ -93,6 +93,7 @@ let lastReceivedMessageInfo = {
 }
 
 let isAutoFetching = false
+let stopFetching = false
 
 // 群成员信息缓存
 const MEMBER_CACHE_TTL = 5 * 60 * 1000 // 5分钟
@@ -2084,6 +2085,10 @@ const adapter = {
         const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
         let reachedMinDate = false
         while (true) {
+            if (stopFetching) {
+                stopFetching = false
+                break
+            }
             const history = await bot.getChatHistory(messageId)
             if (history.error) {
                 console.log(history.error)
@@ -2226,6 +2231,9 @@ const adapter = {
             lastMessage: room.lastMessage,
         })
     },
+    stopFetchingHistory() {
+        stopFetching = true
+    },
     async fetch7DaysHistory() {
         if (isAutoFetching) return
         console.log('正在获取历史消息')
@@ -2293,6 +2301,10 @@ const adapter = {
             await sleep(50)
         }
         for (const i of msgIds2Fetch) {
+            if (stopFetching) {
+                stopFetching = false
+                break
+            }
             await adapter.fetchHistory(i.id, i.roomId, 0)
             if (i.unread) {
                 try {

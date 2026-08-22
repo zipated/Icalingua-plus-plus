@@ -56,6 +56,7 @@ let storage: StorageProvider
 let uin: number
 let bkn: number = 0
 let nickname: string
+let stopFetching = false
 let lastReceivedMessageInfo = {
     timestamp: 0,
     id: 0,
@@ -1433,6 +1434,10 @@ const adapter: typeof oicqAdapter = {
         let reachedMinDate = false
         try {
             while (true) {
+                if (stopFetching) {
+                    stopFetching = false
+                    break
+                }
                 await refreshRkeyIfNeeded()
                 const history = await bot.getHistoryMessages(scene as any, peerId, startSeq, 30)
                 console.log('history', history.messages.length, history.next_message_seq)
@@ -2178,6 +2183,9 @@ const adapter: typeof oicqAdapter = {
             resolve(fallbackUrl)
             return fallbackUrl
         }
+    },
+    stopFetchingHistory() {
+        stopFetching = true
     },
     async fetch7DaysHistory() {
         clients.messageError('Milky 适配器不支持该操作')
