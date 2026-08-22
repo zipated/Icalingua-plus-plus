@@ -6,6 +6,7 @@ on:
       - napcat
     paths:
       - '.github/workflows/docker.yml'
+      - 'icalingua-bridge-oicq/**'
   workflow_dispatch:
 
 env:
