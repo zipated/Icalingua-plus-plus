@@ -139,7 +139,7 @@ const attachEventHandler = () => {
         }
         const now = new Date(data.time * 1000)
         const groupId = data.message_type === 'group' ? data.group_id : undefined
-        const nonSelfId = data.user_id === uin ? (data.target_id || data.user_id) : data.user_id
+        const nonSelfId = data.user_id === uin ? data.target_id || data.user_id : data.user_id
         const senderId = data.sender.user_id
         let roomId = groupId ? -groupId : nonSelfId
         if (await storage.isChatIgnored(roomId)) return
@@ -155,7 +155,7 @@ const attachEventHandler = () => {
             } catch (e) {
                 console.log('无法 getStrangerInfo', e)
             }
-            senderName = (info?.remark || (data.sender as FriendInfo).remark || info?.nickname || data.sender.nickname)
+            senderName = info?.remark || (data.sender as FriendInfo).remark || info?.nickname || data.sender.nickname
         }
         const group = groupId ? await bot.getGroupInfo(groupId) : null
         let roomName = groupId ? group.group_name : senderName
@@ -809,7 +809,7 @@ const adapter: typeof oicqAdapter = {
     },
     async getForwardMsg(resId: string, fileName: string, resolve) {
         try {
-            const history = await bot.getForwardMessage(resId)
+            const history = await bot.getForwardMessage(fileName || resId)
             const messages = []
             for (let i = 0; i < history.messages.length; i++) {
                 const data = history.messages[i]
