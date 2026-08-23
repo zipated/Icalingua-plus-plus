@@ -457,67 +457,67 @@ jobs:
           sudo mkdir /github
           sudo ln -s $PWD /github/workspace
 
-  pack-archpkg-armv7l:
-    runs-on: ubuntu-24.04
-    needs:
-      - build-dist-bundle
-      - arch-artifacts
-      - build-armv7l
-    steps:
-      - name: get the assets
-        uses: actions/download-artifact@v4
-        with:
-          name: pkgres
+  # pack-archpkg-armv7l:
+  #   runs-on: ubuntu-24.04
+  #   needs:
+  #     - build-dist-bundle
+  #     - arch-artifacts
+  #     - build-armv7l
+  #   steps:
+  #     - name: get the assets
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: pkgres
 
-      - name: print the PKGBUILD for armv7l
-        shell: bash
-        run: sed 's/VERSION/${{ needs.build-dist-bundle.outputs.arch-version }}/;s/ARCH/armv7l/' ${{ needs.build-dist-bundle.outputs.pkg-name }}.PKGBUILD.template > PKGBUILD
+  #     - name: print the PKGBUILD for armv7l
+  #       shell: bash
+  #       run: sed 's/VERSION/${{ needs.build-dist-bundle.outputs.arch-version }}/;s/ARCH/armv7l/' ${{ needs.build-dist-bundle.outputs.pkg-name }}.PKGBUILD.template > PKGBUILD
 
-      - name: get binary for armv7l
-        uses: actions/download-artifact@v4
-        with:
-          name: app-armv7l.asar
+  #     - name: get binary for armv7l
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: app-armv7l.asar
 
-      - name: get unpacked native modules for armv7l
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: app-armv7l.asar.unpacked
-          path: app.asar.unpacked
+  #     - name: get unpacked native modules for armv7l
+  #       continue-on-error: true
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: app-armv7l.asar.unpacked
+  #         path: app.asar.unpacked
 
-      - name: pack native modules for makepkg
-        run: |
-          if [ -d "app.asar.unpacked" ] && [ "$(ls -A app.asar.unpacked 2>/dev/null)" ]; then
-            tar cf native-modules.tar app.asar.unpacked
-          else
-            tar cf native-modules.tar --files-from /dev/null
-          fi
+  #     - name: pack native modules for makepkg
+  #       run: |
+  #         if [ -d "app.asar.unpacked" ] && [ "$(ls -A app.asar.unpacked 2>/dev/null)" ]; then
+  #           tar cf native-modules.tar app.asar.unpacked
+  #         else
+  #           tar cf native-modules.tar --files-from /dev/null
+  #         fi
 
-      - run: chmod -R 777 .
+  #     - run: chmod -R 777 .
 
-      - name: makepkg for armv7l
-        uses: Icalinguaplusplus/archlinux-package-action@main
-        with:
-          carch: armv7l
-          flags: "-cfd --noconfirm"
-          namcap: false
-          updpkgsums: true
+  #     - name: makepkg for armv7l
+  #       uses: Icalinguaplusplus/archlinux-package-action@main
+  #       with:
+  #         carch: armv7l
+  #         flags: "-cfd --noconfirm"
+  #         namcap: false
+  #         updpkgsums: true
 
-      - id: pkgname
-        run: echo "pkgname=$(ls *-armv7l.pkg.*)" >> $GITHUB_OUTPUT
+  #     - id: pkgname
+  #       run: echo "pkgname=$(ls *-armv7l.pkg.*)" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v4
-        name: upload armv7l
-        with:
-          name: armv7l.pkg.tar.zst
-          path: ${{ steps.pkgname.outputs.pkgname }}
-          if-no-files-found: error
+  #     - uses: actions/upload-artifact@v4
+  #       name: upload armv7l
+  #       with:
+  #         name: armv7l.pkg.tar.zst
+  #         path: ${{ steps.pkgname.outputs.pkgname }}
+  #         if-no-files-found: error
 
-      - name: 同步 docker 内外目录
-        # $PWD 在 docker 中被映射到 /github/workspace
-        run: |
-          sudo mkdir /github
-          sudo ln -s $PWD /github/workspace
+  #     - name: 同步 docker 内外目录
+  #       # $PWD 在 docker 中被映射到 /github/workspace
+  #       run: |
+  #         sudo mkdir /github
+  #         sudo ln -s $PWD /github/workspace
 
   pack-otherpkg-x86_64:
     runs-on: ubuntu-24.04
@@ -639,65 +639,65 @@ jobs:
           path: icalingua/build/*.${{ matrix.package }}
           if-no-files-found: error
 
-  pack-otherpkg-armv7l:
-    runs-on: ubuntu-24.04
-    needs:
-      - build-armv7l
-      - build-dist-bundle
-    strategy:
-      matrix:
-        package:
-          - deb
-          - rpm
-          - AppImage
-          - tar.xz
-    defaults:
-      run:
-        working-directory: icalingua
-    steps:
-      - uses: actions/checkout@v3
+  # pack-otherpkg-armv7l:
+  #   runs-on: ubuntu-24.04
+  #   needs:
+  #     - build-armv7l
+  #     - build-dist-bundle
+  #   strategy:
+  #     matrix:
+  #       package:
+  #         - deb
+  #         - rpm
+  #         - AppImage
+  #         - tar.xz
+  #   defaults:
+  #     run:
+  #       working-directory: icalingua
+  #   steps:
+  #     - uses: actions/checkout@v3
 
-      - name: Setup Node.js environment
-        uses: actions/setup-node@v3
-        with:
-          node-version: "22"
+  #     - name: Setup Node.js environment
+  #       uses: actions/setup-node@v3
+  #       with:
+  #         node-version: "22"
 
-      - name: Install pnpm
-        run: corepack enable
+  #     - name: Install pnpm
+  #       run: corepack enable
 
-      - name: Get pnpm store directory
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
-        id: pnpm-cache
+  #     - name: Get pnpm store directory
+  #       shell: bash
+  #       run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+  #       id: pnpm-cache
 
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-pnpm-store-
+  #     - name: Cache pnpm store
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+  #         key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+  #         restore-keys: ${{ runner.os }}-pnpm-store-
 
-      - name: pnpm install
-        run: pnpm install --frozen-lockfile
+  #     - name: pnpm install
+  #       run: pnpm install --frozen-lockfile
 
-      - name: get built files
-        uses: actions/download-artifact@v4
-        with:
-          name: armv7l-unpacked
-          path: icalingua/unpacked
+  #     - name: get built files
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: armv7l-unpacked
+  #         path: icalingua/unpacked
 
-      - name: fix premissions
-        run: chmod +x unpacked/icalingua
+  #     - name: fix premissions
+  #       run: chmod +x unpacked/icalingua
 
-      - name: pack
-        run: pnpm build:electron --pd unpacked --armv7l -l ${{ matrix.package }} -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
+  #     - name: pack
+  #       run: pnpm build:electron --pd unpacked --armv7l -l ${{ matrix.package }} -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
 
-      - uses: actions/upload-artifact@v4
-        name: upload ${{ matrix.package }}
-        with:
-          name: armv7l.${{ matrix.package }}
-          path: icalingua/build/*.${{ matrix.package }}
-          if-no-files-found: error
+  #     - uses: actions/upload-artifact@v4
+  #       name: upload ${{ matrix.package }}
+  #       with:
+  #         name: armv7l.${{ matrix.package }}
+  #         path: icalingua/build/*.${{ matrix.package }}
+  #         if-no-files-found: error
 
   cleanup:
     runs-on: ubuntu-24.04
@@ -710,7 +710,7 @@ jobs:
       - build-armv7l
       - pack-archpkg-x86_64
       - pack-archpkg-aarch64
-      - pack-archpkg-armv7l
+      # - pack-archpkg-armv7l
     steps:
       - uses: geekyeggo/delete-artifact@v5
         with:
@@ -721,9 +721,9 @@ jobs:
       - uses: geekyeggo/delete-artifact@v5
         with:
           name: arm64-unpacked
-      - uses: geekyeggo/delete-artifact@v5
-        with:
-          name: armv7l-unpacked
+      # - uses: geekyeggo/delete-artifact@v5
+      #   with:
+      #     name: armv7l-unpacked
       - uses: geekyeggo/delete-artifact@v5
         with:
           name: pkgres
@@ -995,10 +995,10 @@ jobs:
     needs:
       - pack-archpkg-x86_64
       - pack-archpkg-aarch64
-      - pack-archpkg-armv7l
+      # - pack-archpkg-armv7l
       - pack-otherpkg-x86_64
       - pack-otherpkg-arm64
-      - pack-otherpkg-armv7l
+      # - pack-otherpkg-armv7l
       - build-dist-bundle
       - build-windows64
       - build-windows32
@@ -1024,13 +1024,13 @@ jobs:
       - name: rename app-arm64.asar
         run: mv app.asar release/app-arm64.asar
 
-      - name: get app-armv7l.asar
-        uses: actions/download-artifact@v4
-        with:
-          name: app-armv7l.asar
+      # - name: get app-armv7l.asar
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: app-armv7l.asar
 
-      - name: rename app-armv7l.asar
-        run: mv app.asar release/app-armv7l.asar
+      # - name: rename app-armv7l.asar
+      #   run: mv app.asar release/app-armv7l.asar
 
       - name: get aarch64.pkg.tar.zst
         uses: actions/download-artifact@v4
@@ -1062,29 +1062,29 @@ jobs:
           name: arm64.tar.xz
           path: release
 
-      - name: get armv7l.AppImage
-        uses: actions/download-artifact@v4
-        with:
-          name: armv7l.AppImage
-          path: release
+      # - name: get armv7l.AppImage
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: armv7l.AppImage
+      #     path: release
 
-      - name: get armv7l.deb
-        uses: actions/download-artifact@v4
-        with:
-          name: armv7l.deb
-          path: release
+      # - name: get armv7l.deb
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: armv7l.deb
+      #     path: release
 
-      - name: get armv7l.rpm
-        uses: actions/download-artifact@v4
-        with:
-          name: armv7l.rpm
-          path: release
+      # - name: get armv7l.rpm
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: armv7l.rpm
+      #     path: release
 
-      - name: get armv7l.tar.xz
-        uses: actions/download-artifact@v4
-        with:
-          name: armv7l.tar.xz
-          path: release
+      # - name: get armv7l.tar.xz
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: armv7l.tar.xz
+      #     path: release
 
       - name: get x86_64.AppImage
         uses: actions/download-artifact@v4
