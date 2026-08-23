@@ -840,7 +840,15 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                                         files: [],
                                         bubble_id: 0,
                                     }
-                                    await processMessage(data.content || (data as any).message, innerMessage, {})
+                                    const innerLastMessage: LastMessageLike = { content: '' }
+                                    await processMessage(
+                                        data.content || (data as any).message,
+                                        innerMessage,
+                                        innerLastMessage,
+                                    )
+                                    // 预览文案用紧凑文本（图片/文件/语音会带 [Image]/[File]/[Audio] 占位），
+                                    // 否则图片等纯媒体消息的 message.content 为空，会被 news 过滤掉
+                                    innerMessage.content = innerLastMessage.content || innerMessage.content
                                     messages.push(innerMessage)
                                 }
                                 message.code = buildNapCatForwardCard(forwardId, messages)
