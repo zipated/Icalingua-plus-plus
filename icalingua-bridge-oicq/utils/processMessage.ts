@@ -153,10 +153,9 @@ const scheduleAsyncSilkDecode = (roomId: number, message: Message, url: string, 
  */
 const buildNapCatForwardCard = (forwardId: string, messages?: Message[]): string => {
     const news = (messages ?? [])
-        .map((item) => item.content)
-        .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
+        .filter((item) => typeof item.content === 'string' && item.content.trim().length > 0)
         .slice(0, 12)
-        .map((text) => ({ text }))
+        .map((item) => ({ text: `${item.username}: ${item.content}` }))
     const payload = {
         app: 'com.tencent.multimsg',
         desc: '聊天记录',
