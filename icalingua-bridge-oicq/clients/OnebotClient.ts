@@ -326,27 +326,10 @@ export default class extends EventEmitter<{
         this.callApi<{
             url: string
         }>('get_private_file_url', { file_id })
-    public getForwardMessage = (message_id: string) =>
+    public getForwardMessage = (id: string) =>
         this.callApi<{
-            messages: [
-                {
-                    content: MessageElem[]
-                    sender: {
-                        nickname: '发送者A'
-                        user_id: 10086
-                    }
-                    time: 1595694374
-                },
-                {
-                    content: MessageElem[]
-                    sender: {
-                        nickname: '发送者B'
-                        user_id: 10087
-                    }
-                    time: 1595694393
-                },
-            ]
-        }>('get_forward_msg', { message_id })
+            messages: (GroupMessage | PrivateMessage)[]
+        }>('get_forward_msg', { id })
     public sendGroupSign = (group_id: number) => this.callApi('send_group_sign', { group_id })
     public clickInlineKeyboardButton = (
         group_id: number,

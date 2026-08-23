@@ -827,7 +827,7 @@ const adapter: typeof oicqAdapter = {
                     files: [],
                     bubble_id: 0,
                 }
-                await processMessage(data.content || (data as any).message, message, {})
+                await processMessage(data.message, message, {})
                 messages.push(message)
             }
             resolve(messages)
