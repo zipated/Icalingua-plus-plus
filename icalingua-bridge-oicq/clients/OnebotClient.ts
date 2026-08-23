@@ -13,6 +13,7 @@ type BaseEvent = {
 
 type BaseMessage = BaseEvent & {
     message_id: number
+    message_seq?: number
     user_id: number
     target_id: number
     message: MessageElem[]
@@ -347,7 +348,13 @@ export default class extends EventEmitter<{
             ]
         }>('get_forward_msg', { message_id })
     public sendGroupSign = (group_id: number) => this.callApi('send_group_sign', { group_id })
-    public clickInlineKeyboardButton = (group_id: number, bot_appid: number, button_id: string, callback_data: string, msg_seq: number) =>
+    public clickInlineKeyboardButton = (
+        group_id: number,
+        bot_appid: number,
+        button_id: string,
+        callback_data: string,
+        msg_seq: number,
+    ) =>
         this.callApi('click_inline_keyboard_button', {
             group_id: String(group_id),
             bot_appid: String(bot_appid),
@@ -429,11 +436,19 @@ export default class extends EventEmitter<{
     public getGroupMessageHistory = (group_id: number, message_seq?: number) =>
         this.callApi<{
             messages: GroupMessage[]
-        }>('get_group_msg_history', { group_id: String(group_id), message_seq: message_seq != null ? String(message_seq) : undefined, reverseOrder: true })
+        }>('get_group_msg_history', {
+            group_id: String(group_id),
+            message_seq: message_seq != null ? String(message_seq) : undefined,
+            reverseOrder: true,
+        })
     public getPrivateMessageHistory = (user_id: number, message_seq?: number) =>
         this.callApi<{
             messages: PrivateMessage[]
-        }>('get_friend_msg_history', { user_id: String(user_id), message_seq: message_seq != null ? String(message_seq) : undefined, reverseOrder: true })
+        }>('get_friend_msg_history', {
+            user_id: String(user_id),
+            message_seq: message_seq != null ? String(message_seq) : undefined,
+            reverseOrder: true,
+        })
     public setGroupRemark = (group_id: number, remark: string) =>
         this.callApi('set_group_remark', { group_id: String(group_id), remark })
     public setFriendRemark = (user_id: number, remark: string) =>
@@ -462,7 +477,13 @@ export default class extends EventEmitter<{
         file_id: string,
         current_parent_directory: string,
         target_parent_directory: string,
-    ) => this.callApi('move_group_file', { group_id: String(group_id), file_id, current_parent_directory, target_parent_directory })
+    ) =>
+        this.callApi('move_group_file', {
+            group_id: String(group_id),
+            file_id,
+            current_parent_directory,
+            target_parent_directory,
+        })
     public gfsRename = (group_id: number, file_id: string, current_parent_directory: string, new_name: string) =>
         this.callApi('rename_group_file', { group_id: String(group_id), file_id, current_parent_directory, new_name })
     public gfsUpload = (group_id: number, file: string, name: string, folder_id: string) =>

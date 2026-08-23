@@ -1396,22 +1396,23 @@ const adapter: typeof oicqAdapter = {
         let totalCount = 0
         const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
         let reachedMinDate = false
+        let messageSeq: number | undefined = undefined
         while (true) {
             if (stopFetching) {
                 stopFetching = false
                 break
             }
             try {
-                // NapCat 的 message_seq 是纯数字；客户端右键“获取历史消息”传来的是 oicq 风格 base64 buffer id，
-                // Number() 会得到 NaN。解析失败时传 undefined，从最新一页开始拉取
-                const parsedSeq = Number(messageId)
-                const messageSeq = Number.isInteger(parsedSeq) && parsedSeq > 0 ? parsedSeq : undefined
                 const history = await (roomId > 0
                     ? bot.getPrivateMessageHistory(roomId, messageSeq)
                     : bot.getGroupMessageHistory(-roomId, messageSeq))
                 const batchMessages: Message[] = []
+                let minSeq = Number.MAX_SAFE_INTEGER
                 for (let i = 0; i < history.messages.length; i++) {
                     const data = history.messages[i]
+                    // 记录本批最早的 seq，用于下一页分页
+                    const seq = Number(data.message_seq)
+                    if (seq > 0 && seq < minSeq) minSeq = seq
                     // 检查日期限制
                     if (minDate && data.time * 1000 < minDate) {
                         reachedMinDate = true
@@ -1466,7 +1467,9 @@ const adapter: typeof oicqAdapter = {
                 }
                 if (reachedMinDate) break
                 if (history.messages.length === 0 || batchMessages.length === 0) break
-                messageId = batchMessages[0]._id as string
+                // 无有效 seq（整批都没有序号）或已到最早一条，停止分页
+                if (minSeq === Number.MAX_SAFE_INTEGER || minSeq <= 1) break
+                messageSeq = minSeq - 1
                 //todo 所有消息都过一遍，数据库里面都有才能结束
                 if (firstMsgExists) break
             } catch (e) {
