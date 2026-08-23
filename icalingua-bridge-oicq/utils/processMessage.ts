@@ -774,7 +774,7 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                         message.content += '[sFace: ' + m.data.text + '(' + m.data.id + ')]'
                         break
                     case 'markdown':
-                        markdown += m.data.markdown
+                        markdown += m.data.content || m.data.markdown
                         break
                     case 'button':
                         try {
