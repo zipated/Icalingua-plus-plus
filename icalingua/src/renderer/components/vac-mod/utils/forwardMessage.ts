@@ -27,6 +27,11 @@ export function parseForwardResource(code: string | undefined): ForwardResource 
 
         const detail =
             isRecord(parsed) && isRecord(parsed.meta) && isRecord(parsed.meta.detail) ? parsed.meta.detail : undefined
+        // 卡片内嵌了接收时解析好的完整消息，直接使用，
+        // 避免事后调 get_forward_msg 因 NapCat 缓存过期而失败
+        if (detail && Array.isArray(detail.messages) && detail.messages.length) {
+            return { messages: detail.messages }
+        }
         return createForwardResource(
             detail && firstNonEmptyString(detail.resid),
             detail && firstNonEmptyString(detail.uniseq),
@@ -46,8 +51,12 @@ export function createForwardOpenEvent(
     parentResId?: string,
 ): ForwardOpenEvent {
     const { messages, resId, fileName } = resource
+    // 卡片内嵌完整消息时优先直接使用（含嵌套场景），不再依赖 get_forward_msg
+    if (messages) {
+        return { resId: messages }
+    }
     if (!parentResId || (!fileName && messageType !== 'nestedforward')) {
-        return { resId: messages ?? resId ?? messageValue }
+        return { resId: resId ?? messageValue }
     }
 
     const event: ForwardOpenEvent = {

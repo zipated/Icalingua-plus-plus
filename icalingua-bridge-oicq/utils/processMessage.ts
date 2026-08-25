@@ -145,17 +145,18 @@ const scheduleAsyncSilkDecode = (roomId: number, message: Message, url: string, 
  *
  * 前端 `FormatMessage.vue` 用 `hasForwardCard = Boolean(code)` 决定是否渲染卡片，
  * 卡片内容由 `parseForwardCard` 从 `meta.detail.news` 提取，点击时由
- * `parseForwardResource` 取 `meta.detail.resid`（= NapCat 上报的数字 id）走
- * `get_forward_msg({ id })` 的数字分支拉取完整详情。
+ * `parseForwardResource` 优先取 `meta.detail.messages`（内嵌完整消息）直接渲染；
+ * 只有旧卡片没有内嵌内容时，才用 `meta.detail.resid` 走 `get_forward_msg({ id })` 兜底拉取。
  *
  * - `resid`/`uniseq`: NapCat 上报的 forward segment id（数字字符串）
- * - `messages`: 内嵌消息列表，用于生成卡片预览正文 news（最多取前 12 条）
+ * - `messages`: 接收时解析好的完整内层消息，整体内嵌进卡片（打开时直接渲染，避免缓存过期拉取失败）
+ * - `previews`: 每条的“发送者: 内容”紧凑文案，用于生成卡片预览 news（最多取前 12 条）
  */
-const buildNapCatForwardCard = (forwardId: string, messages?: Message[]): string => {
-    const news = (messages ?? [])
-        .filter((item) => typeof item.content === 'string' && item.content.trim().length > 0)
+const buildNapCatForwardCard = (forwardId: string, messages: Message[], previews: string[]): string => {
+    const news = (previews ?? [])
+        .filter((text): text is string => typeof text === 'string' && text.trim().length > 0)
         .slice(0, 12)
-        .map((item) => ({ text: `${item.username}: ${item.content}` }))
+        .map((text) => ({ text }))
     const payload = {
         app: 'com.tencent.multimsg',
         desc: '聊天记录',
@@ -163,6 +164,8 @@ const buildNapCatForwardCard = (forwardId: string, messages?: Message[]): string
             detail: {
                 resid: forwardId,
                 uniseq: `${forwardId}`,
+                // 内嵌完整消息：打开时直接渲染，避免事后 get_forward_msg 因 NapCat 缓存过期而失败
+                messages,
                 ...(news.length ? { source: '聊天记录', news } : {}),
                 summary: `${news.length ? news.length : 0}条聊天记录`,
             },
@@ -827,6 +830,7 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                         if (Array.isArray(forwardContent)) {
                             try {
                                 const messages = []
+                                const previews = []
                                 for (let i = 0; i < forwardContent.length; i++) {
                                     const data = forwardContent[i]
                                     const innerMessage: Message = {
@@ -846,12 +850,14 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                                         innerMessage,
                                         innerLastMessage,
                                     )
-                                    // 预览文案用紧凑文本（图片/文件/语音会带 [Image]/[File]/[Audio] 占位），
-                                    // 否则图片等纯媒体消息的 message.content 为空，会被 news 过滤掉
-                                    innerMessage.content = innerLastMessage.content || innerMessage.content
                                     messages.push(innerMessage)
+                                    // 预览行用紧凑文本（图片/文件/语音带 [Image]/[File]/[Audio] 占位），
+                                    // 完整 content 保留在 innerMessage 里随卡片内嵌，供之后打开渲染
+                                    previews.push(
+                                        `${innerMessage.username}: ${innerLastMessage.content || innerMessage.content}`,
+                                    )
                                 }
-                                message.code = buildNapCatForwardCard(forwardId, messages)
+                                message.code = buildNapCatForwardCard(forwardId, messages, previews)
                             } catch (e) {
                                 message.content += `\n[内层消息解析失败: ${e.message}]`
                             }

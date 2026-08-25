@@ -837,7 +837,8 @@ const adapter: typeof oicqAdapter = {
                 {
                     senderId: 0,
                     username: '错误',
-                    content: e.message,
+                    // callApi 失败时 reject 的是字符串，e.message 会是 undefined
+                    content: e instanceof Error ? e.message : typeof e === 'string' ? e : '获取转发消息失败',
                     timestamp: formatDate('hh:mm:ss'),
                     date: formatDate('yyyy/MM/dd'),
                     _id: 0,
