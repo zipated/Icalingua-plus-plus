@@ -58,6 +58,7 @@ import {
     SyncMessageEventData,
     SyncReadedEventData,
     SyncRemarkEventData,
+    LoginAuthEventData,
 } from 'oicq-icalingua-plus-plus'
 import path from 'path'
 import createRoom from '../../utils/createRoom'
@@ -1055,8 +1056,9 @@ const loginHandlers = {
             height: 500,
             width: 500,
             webPreferences: {
-                nodeIntegration: true,
+                nodeIntegration: false,
                 contextIsolation: false,
+                preload: path.join(getStaticPath(), '/sliderPreload.js'),
             },
         })
         const inject = fs.readFileSync(path.join(getStaticPath(), '/sliderinj.js'), 'utf-8')
@@ -1106,6 +1108,25 @@ const loginHandlers = {
         console.log(data)
         const url = 'data:image/png;base64,' + data.image.toString('base64')
         sendToLoginWindow('qrcodeLogin', url)
+    },
+    auth(data: LoginAuthEventData) {
+        console.log(data)
+        const veriWin = newIcalinguaWindow({
+            height: 500,
+            width: 500,
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: false,
+            },
+        })
+        const inject = `window.__INITIAL_STATE__.deviceInfo = ${JSON.stringify(data.device)};`
+        veriWin.webContents.on('did-finish-load', function () {
+            veriWin.webContents.executeJavaScript(inject)
+        })
+        veriWin.loadURL(data.url)
+        veriWin.on('close', () => {
+            bot.login()
+        })
     },
 }
 //endregion
@@ -1235,6 +1256,7 @@ const attachLoginHandler = () => {
     bot.on('system.online', loginHandlers.onSucceed)
     bot.on('system.login.device', loginHandlers.verify)
     bot.on('system.login.qrcode', loginHandlers.qrcode)
+    bot.on('system.login.auth', loginHandlers.auth)
 }
 
 //endregion
@@ -1911,6 +1933,7 @@ const adapter: OicqAdapter = {
                 sign_api_key: form.signAPIKey,
                 force_algo_T544: form.forceAlgoT544,
                 useNT: form.useNT,
+                forceWt: form.forceWt,
                 apk_info: Number(form.protocol) === -1 ? apkInfo : undefined,
             })
             _sendPrivateMsg = bot.sendPrivateMsg
