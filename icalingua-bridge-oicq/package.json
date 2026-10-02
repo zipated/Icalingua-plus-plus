@@ -1,7 +1,7 @@
 {
     "name": "icalingua-bridge-oicq",
-    "version": "2.26.6",
-    "protocolVersion": "2.26.5",
+    "version": "2.26.8",
+    "protocolVersion": "2.26.7",
     "main": "index.ts",
     "repository": "https://github.com/Icalingua-plus-plus/Icalingua-plus-plus.git",
     "author": "The Icalingua++ Authors <Icalinguaplusplus@protonmail.com>",
@@ -43,7 +43,7 @@
         "minimist": "^1.2.8",
         "mongodb": "^4.17.2",
         "mysql": "^2.18.1",
-        "oicq-icalingua-plus-plus": "^1.26.25",
+        "oicq-icalingua-plus-plus": "^1.26.26",
         "pg": "^8.22.0",
         "reconnecting-websocket": "^4.4.0",
         "silk-ilpp": "^1.0.1",
