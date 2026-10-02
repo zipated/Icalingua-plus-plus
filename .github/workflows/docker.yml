@@ -14,7 +14,7 @@ env:
   ALIYUN_IMAGE: registry.cn-hangzhou.aliyuncs.com/zipated/icalingua-bridge-oicq
   TAG_PREFIX: git
   TAG_SUFFIX: ${{ github.ref_name }}
-  ICALINGUA_SHORT_SHA: 3e55bd60
+  ICALINGUA_SHORT_SHA: c1ca57d
   NAPCAT_VERSION: 4.18.28
 
 jobs:
