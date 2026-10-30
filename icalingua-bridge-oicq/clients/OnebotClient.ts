@@ -14,6 +14,8 @@ type BaseEvent = {
 type BaseMessage = BaseEvent & {
     message_id: number
     message_seq?: number
+    /** NapCat 输出的真实消息序号（msgSeq），同一消息稳定，可用来去重 */
+    real_seq?: string | number
     user_id: number
     target_id: number
     message: MessageElem[]

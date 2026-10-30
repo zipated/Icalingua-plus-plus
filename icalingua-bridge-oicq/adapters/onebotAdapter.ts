@@ -6,7 +6,7 @@ import MongoStorageProvider from '@icalingua/storage-providers/MongoStorageProvi
 import RedisStorageProvider from '@icalingua/storage-providers/RedisStorageProvider'
 import SQLStorageProvider from '@icalingua/storage-providers/SQLStorageProvider'
 import { broadcast, broadcastDatabaseUpgradeProgress } from '../providers/socketIoProvider'
-import OnebotClient, { GroupMessage } from '../clients/OnebotClient'
+import OnebotClient, { GroupMessage, PrivateMessage } from '../clients/OnebotClient'
 import Room from '@icalingua/types/Room'
 import ChatGroup from '@icalingua/types/ChatGroup'
 import clients from '../utils/clients'
@@ -58,6 +58,31 @@ let bkn: number = 0
 let nickname: string
 let isAutoFetching = false
 let stopFetching = false
+// 同一会话同时只允许一轮拉取，客户端重复触发时直接跳过
+const fetchingHistoryRooms = new Set<number>()
+
+// NapCat 的 message_id 是 MessageUnique 生成的短 id，会因映射表淘汰、peer 变化、重建等原因改变，
+// 不能作为“是否同一条消息 / 是否拉到旧消息”的唯一依据。
+// real_seq（msgSeq）对同一条消息是稳定的，优先用它做身份标识。
+const getHistoryRealSeq = (data?: { real_seq?: string | number }) => {
+    const seq = Number(data?.real_seq)
+    return Number.isSafeInteger(seq) && seq > 0 ? seq : undefined
+}
+
+// real_seq 缺失时退化为 时间 + 发送者 + 消息段摘要 的指纹
+const getHistoryMessageIdentity = (data: GroupMessage | PrivateMessage) => {
+    const seq = getHistoryRealSeq(data)
+    if (seq !== undefined) return `seq:${seq}`
+    const segments = Array.isArray(data.message)
+        ? data.message
+              .map((elem) => {
+                  const elemData = (elem as any).data ?? {}
+                  return `${elem.type}:${elemData.file ?? ''}:${elemData.text ?? ''}`
+              })
+              .join('|')
+        : ''
+    return `fp:${data.time}:${data.sender?.user_id ?? ''}:${segments}`
+}
 
 // 群成员信息缓存
 const MEMBER_CACHE_TTL = 5 * 60 * 1000 // 5分钟
@@ -1397,125 +1422,175 @@ const adapter: typeof oicqAdapter = {
         return
     },
     async fetchHistory(messageId: string, roomId: number, currentLoadedMessagesCount: number) {
-        console.log(`${roomId} 开始拉取消息`)
-        clients.messageSuccess('开始拉取消息')
-        let totalCount = 0
-        const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
-        let reachedMinDate = false
-        // 客户端传入的是已加载的最早一条消息 id；NapCat 的 message_id 与 message_seq 同为短 id，
-        // 直接作为起始分页点，避免每次都从最新消息重新拉取。
-        const initialSeq = Number(messageId)
-        let messageSeq: number | undefined = Number.isSafeInteger(initialSeq) && initialSeq > 0 ? initialSeq : undefined
-        let anchorFallbackTried = false
-        // 短 id 是随机值，不能靠大小判断是否前进；记录本轮已取到的消息 id 用于检测分页停滞
-        const fetchedMessageIds = new Set<string>()
-        while (true) {
-            if (stopFetching) {
-                stopFetching = false
-                break
-            }
-            const startedFromLatest = messageSeq === undefined
-            try {
-                const history = await (roomId > 0
-                    ? bot.getPrivateMessageHistory(roomId, messageSeq)
-                    : bot.getGroupMessageHistory(-roomId, messageSeq))
-                const batchMessages: Message[] = []
-                // 记录本批时间最早的一条，作为下一页的分页锚点
-                // （NapCat 的短 id 无大小顺序，不能像序号一样取最小值或减 1）
-                let oldestData: { time: number; message_seq?: number; message_id: number } | undefined
-                for (let i = 0; i < history.messages.length; i++) {
-                    const data = history.messages[i]
-                    if (!oldestData || data.time < oldestData.time) oldestData = data
-                    // 检查日期限制
-                    if (minDate && data.time * 1000 < minDate) {
-                        reachedMinDate = true
-                        break
-                    }
-                    const message: Message = {
-                        senderId: data.sender.user_id,
-                        username:
-                            'group_id' in data
-                                ? data.group_id
-                                    ? data.anonymous
-                                        ? data.anonymous.name
-                                        : data.sender.nickname
-                                    : data.sender.nickname
-                                : data.sender.nickname,
-                        content: '',
-                        timestamp: formatDate('hh:mm:ss', new Date(data.time * 1000)),
-                        date: formatDate('yyyy/MM/dd', new Date(data.time * 1000)),
-                        _id: data.message_id,
-                        time: data.time * 1000,
-                        role: (data.sender as MemberBaseInfo).role,
-                        title:
-                            (data as GroupMessage).group_id && (data as GroupMessage).anonymous
-                                ? '匿名'
-                                : (data.sender as MemberBaseInfo).title,
-                        files: [],
-                        anonymousId:
-                            (data as GroupMessage).group_id && (data as GroupMessage).anonymous
-                                ? (data as GroupMessage).anonymous.id
-                                : null,
-                        anonymousflag:
-                            (data as GroupMessage).group_id && (data as GroupMessage).anonymous
-                                ? (data as GroupMessage).anonymous.flag
-                                : null,
-                        bubble_id: 0,
-                    }
-                    try {
-                        await processMessage(data.message, message, {}, roomId, true)
-                        if (await storage.isChatIgnored(message.senderId)) message.hide = true
-                        batchMessages.push(message)
-                    } catch (e) {
-                        console.error(e)
-                    }
-                }
-                // 检查第一条消息是否已存在（在存储之前检查）
-                const firstMsg = batchMessages[0]
-                const firstMsgExists = firstMsg && (await storage.getMessage(roomId, firstMsg._id as string))
-                // 边拉边存：每批消息立即存入数据库
-                if (batchMessages.length > 0) {
-                    await storage.addMessages(roomId, batchMessages)
-                    totalCount += batchMessages.length
-                }
-                if (reachedMinDate) break
-                if (history.messages.length === 0 || batchMessages.length === 0) break
-                // NapCat 的 message_seq 是 MessageUnique 生成的短 id（MD5 前半段），
-                // 并非连续序号，不能减 1 后再用，否则下次查询会命中不存在的位置并抛「消息X不存在」。
-                // 使用本批时间最早一条的短 id 作为下一页锚点。
-                const nextSeq = Number(oldestData?.message_seq ?? oldestData?.message_id)
-                if (!Number.isSafeInteger(nextSeq) || nextSeq <= 0) break
-                // 用本批是否带来新消息判断分页是否前进，避免原地打转
-                const hasNewMessage = batchMessages.some((m) => !fetchedMessageIds.has(String(m._id)))
-                for (const m of batchMessages) fetchedMessageIds.add(String(m._id))
-                if (!hasNewMessage) break
-                messageSeq = nextSeq
-                //todo 所有消息都过一遍，数据库里面都有才能结束
-                // 仅从最新消息开始拉时，用它判断是否已接上库中已有历史；
-                // 显式从某条消息往前拉时，该消息本身就在库里，不能据此提前结束。
-                if (startedFromLatest && firstMsgExists) break
-            } catch (e) {
-                const errorMessage = e instanceof Error ? e.message : String(e)
-                // NapCat 在历史到底时返回空列表并抛「消息X不存在」，按正常结束处理，不向客户端弹错误。
-                // 若首次传入的起始消息已失效（NapCat 重启后短 id 表重建），回退到从最新消息重新拉一次。
-                if (/消息.*不存在/.test(errorMessage)) {
-                    if (messageSeq !== undefined && !anchorFallbackTried && totalCount === 0) {
-                        anchorFallbackTried = true
-                        messageSeq = undefined
-                        continue
-                    }
+        if (fetchingHistoryRooms.has(roomId)) {
+            // 客户端可能重复触发同一会话的拉取，直接跳过，避免两条循环同时插入重复消息
+            console.log(`${roomId} 正在拉取消息，忽略重复请求`)
+            return
+        }
+        fetchingHistoryRooms.add(roomId)
+        try {
+            console.log(`${roomId} 开始拉取消息`)
+            clients.messageSuccess('开始拉取消息')
+            let totalCount = 0
+            const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
+            let reachedMinDate = false
+            // 客户端传入的是已加载的最早一条消息 id；NapCat 的 message_id 与 message_seq 同为短 id，
+            // 直接作为起始分页点，避免每次都从最新消息重新拉取。
+            const initialSeq = Number(messageId)
+            let messageSeq: number | undefined =
+                Number.isSafeInteger(initialSeq) && initialSeq > 0 ? initialSeq : undefined
+            let anchorFallbackTried = false
+            // message_id 不稳定，改用 real_seq 记录本轮已拉到的消息，防止同一消息换 id 后被反复入库
+            const fetchedIdentities = new Set<string>()
+            // 分页必须严格向更早的消息推进，否则说明锚点失效或服务端忽略了 message_seq
+            let previousOldestRealSeq: number | undefined
+            let previousOldestTime: number | undefined
+            const maxPages = 2000
+            let pageCount = 0
+            while (true) {
+                if (stopFetching) {
+                    stopFetching = false
                     break
                 }
-                console.log(e)
-                clients.messageError('错误：' + errorMessage)
-                break
+                if (pageCount++ >= maxPages) {
+                    console.log(`${roomId} 达到单次拉取页数上限，停止拉取`)
+                    break
+                }
+                const startedFromLatest = messageSeq === undefined
+                try {
+                    const history = await (roomId > 0
+                        ? bot.getPrivateMessageHistory(roomId, messageSeq)
+                        : bot.getGroupMessageHistory(-roomId, messageSeq))
+                    const batchMessages: Message[] = []
+                    // 记录本批时间最早的一条，作为下一页的分页锚点
+                    // （NapCat 的短 id 无大小顺序，不能像序号一样取最小值或减 1）
+                    let oldestData: GroupMessage | PrivateMessage | undefined
+                    for (let i = 0; i < history.messages.length; i++) {
+                        const data = history.messages[i]
+                        // 同一秒内的消息时间相同，再用 real_seq 精确比较一次，避免锚点选到较新的一条
+                        const dataRealSeq = getHistoryRealSeq(data)
+                        const oldestRealSeq = getHistoryRealSeq(oldestData)
+                        if (
+                            !oldestData ||
+                            data.time < oldestData.time ||
+                            (data.time === oldestData.time &&
+                                dataRealSeq !== undefined &&
+                                oldestRealSeq !== undefined &&
+                                dataRealSeq < oldestRealSeq)
+                        ) {
+                            oldestData = data
+                        }
+                        // 检查日期限制
+                        if (minDate && data.time * 1000 < minDate) {
+                            reachedMinDate = true
+                            break
+                        }
+                        // 同一条消息可能因为各种原因换了 message_id，按稳定身份去重，避免重复入库
+                        const identity = getHistoryMessageIdentity(data)
+                        if (fetchedIdentities.has(identity)) continue
+                        fetchedIdentities.add(identity)
+                        const message: Message = {
+                            senderId: data.sender.user_id,
+                            username:
+                                'group_id' in data
+                                    ? data.group_id
+                                        ? data.anonymous
+                                            ? data.anonymous.name
+                                            : data.sender.nickname
+                                        : data.sender.nickname
+                                    : data.sender.nickname,
+                            content: '',
+                            timestamp: formatDate('hh:mm:ss', new Date(data.time * 1000)),
+                            date: formatDate('yyyy/MM/dd', new Date(data.time * 1000)),
+                            _id: data.message_id,
+                            time: data.time * 1000,
+                            role: (data.sender as MemberBaseInfo).role,
+                            title:
+                                (data as GroupMessage).group_id && (data as GroupMessage).anonymous
+                                    ? '匿名'
+                                    : (data.sender as MemberBaseInfo).title,
+                            files: [],
+                            anonymousId:
+                                (data as GroupMessage).group_id && (data as GroupMessage).anonymous
+                                    ? (data as GroupMessage).anonymous.id
+                                    : null,
+                            anonymousflag:
+                                (data as GroupMessage).group_id && (data as GroupMessage).anonymous
+                                    ? (data as GroupMessage).anonymous.flag
+                                    : null,
+                            bubble_id: 0,
+                        }
+                        try {
+                            await processMessage(data.message, message, {}, roomId, true)
+                            if (await storage.isChatIgnored(message.senderId)) message.hide = true
+                            batchMessages.push(message)
+                        } catch (e) {
+                            console.error(e)
+                        }
+                    }
+                    // 检查第一条消息是否已存在（在存储之前检查）
+                    const firstMsg = batchMessages[0]
+                    const firstMsgExists = firstMsg && (await storage.getMessage(roomId, firstMsg._id as string))
+                    // 边拉边存：每批消息立即存入数据库
+                    if (batchMessages.length > 0) {
+                        await storage.addMessages(roomId, batchMessages)
+                        totalCount += batchMessages.length
+                    }
+                    if (reachedMinDate) break
+                    if (history.messages.length === 0) break
+                    // 整页都是本轮已经拉取过的消息（即使 message_id 变了），说明分页回到了旧位置，正常结束
+                    if (batchMessages.length === 0) break
+                    // NapCat 的 message_seq 是 MessageUnique 生成的短 id（MD5 前半段），
+                    // 并非连续序号，不能减 1 后再用，否则下次查询会命中不存在的位置并抛「消息X不存在」。
+                    // 使用本批时间最早一条的短 id 作为下一页锚点。
+                    const nextSeq = Number(oldestData?.message_seq ?? oldestData?.message_id)
+                    if (!Number.isSafeInteger(nextSeq) || nextSeq <= 0) break
+                    // 锚点是短 id，无法用大小判断方向；改用稳定的 real_seq 确认分页确实在向更早推进，
+                    // 否则服务端忽略了 message_seq 时会一直返回同一批消息，造成无限拉取。
+                    const oldestSeq = getHistoryRealSeq(oldestData)
+                    if (oldestSeq !== undefined) {
+                        if (previousOldestRealSeq !== undefined && oldestSeq >= previousOldestRealSeq) {
+                            console.log(`${roomId} 分页未向更早推进，停止拉取`)
+                            break
+                        }
+                        previousOldestRealSeq = oldestSeq
+                    } else if (previousOldestTime !== undefined && (oldestData?.time ?? 0) >= previousOldestTime) {
+                        console.log(`${roomId} 分页未向更早推进，停止拉取`)
+                        break
+                    }
+                    previousOldestTime = oldestData?.time
+                    messageSeq = nextSeq
+                    //todo 所有消息都过一遍，数据库里面都有才能结束
+                    // 仅从最新消息开始拉时，用它判断是否已接上库中已有历史；
+                    // 显式从某条消息往前拉时，该消息本身就在库里，不能据此提前结束。
+                    if (startedFromLatest && firstMsgExists) break
+                } catch (e) {
+                    const errorMessage = e instanceof Error ? e.message : String(e)
+                    // NapCat 在历史到底时返回空列表并抛「消息X不存在」，按正常结束处理，不向客户端弹错误。
+                    // 若首次传入的起始消息已失效（NapCat 重启后短 id 表重建），回退到从最新消息重新拉一次。
+                    if (/消息.*不存在/.test(errorMessage)) {
+                        if (messageSeq !== undefined && !anchorFallbackTried && totalCount === 0) {
+                            anchorFallbackTried = true
+                            messageSeq = undefined
+                            previousOldestRealSeq = undefined
+                            previousOldestTime = undefined
+                            continue
+                        }
+                        break
+                    }
+                    console.log(e)
+                    clients.messageError('错误：' + errorMessage)
+                    break
+                }
             }
+            console.log(`${roomId} 已拉取 ${totalCount} 条消息`)
+            clients.messageSuccess(`已拉取 ${totalCount} 条消息`)
+            storage
+                .fetchMessages(roomId, {}, currentLoadedMessagesCount + 20)
+                .then((messages) => clients.setMessages(roomId, messages))
+        } finally {
+            fetchingHistoryRooms.delete(roomId)
         }
-        console.log(`${roomId} 已拉取 ${totalCount} 条消息`)
-        clients.messageSuccess(`已拉取 ${totalCount} 条消息`)
-        storage
-            .fetchMessages(roomId, {}, currentLoadedMessagesCount + 20)
-            .then((messages) => clients.setMessages(roomId, messages))
     },
 
     stopFetchingHistory() {
