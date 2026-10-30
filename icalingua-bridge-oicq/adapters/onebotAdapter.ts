@@ -71,8 +71,9 @@ const getHistoryRealSeq = (data?: { real_seq?: string | number }) => {
 
 // real_seq 缺失时退化为 时间 + 发送者 + 消息段摘要 的指纹
 const getHistoryMessageIdentity = (data: GroupMessage | PrivateMessage) => {
-    const seq = getHistoryRealSeq(data)
-    if (seq !== undefined) return `seq:${seq}`
+    // 直接用字符串形式，避免大整数转 Number 后丢精度
+    const seq = data.real_seq
+    if (seq !== undefined && seq !== null && String(seq) !== '' && String(seq) !== '0') return `seq:${seq}`
     const segments = Array.isArray(data.message)
         ? data.message
               .map((elem) => {
@@ -82,6 +83,43 @@ const getHistoryMessageIdentity = (data: GroupMessage | PrivateMessage) => {
               .join('|')
         : ''
     return `fp:${data.time}:${data.sender?.user_id ?? ''}:${segments}`
+}
+
+// 已入库消息的指纹：只用不随 message_id 变化的字段（时间、发送者、内容、附件摘要）
+const getStoredMessageIdentity = (message: Message) => {
+    const files = Array.isArray(message.files)
+        ? message.files.map((file) => `${file.type}:${file.name ?? ''}:${file.fid ?? ''}`).join(',')
+        : ''
+    return `${message.time}|${message.senderId}|${message.content}|${files}`
+}
+
+// 每个会话已入库消息的指纹缓存，跨多次拉取有效，避免 message_id 变化后同一消息被反复入库
+const roomStoredIdentities = new Map<number, Set<string>>()
+const ROOM_STORED_IDENTITIES_LIMIT = 30
+const ROOM_STORED_IDENTITIES_SEED = 2000
+
+const getRoomStoredIdentities = async (roomId: number): Promise<Set<string>> => {
+    const cached = roomStoredIdentities.get(roomId)
+    if (cached) {
+        // 重新放到 Map 末尾，保持简单的 LRU 顺序
+        roomStoredIdentities.delete(roomId)
+        roomStoredIdentities.set(roomId, cached)
+        return cached
+    }
+    const identities = new Set<string>()
+    try {
+        const messages = await storage.fetchMessages(roomId, {}, ROOM_STORED_IDENTITIES_SEED)
+        for (const message of messages || []) identities.add(getStoredMessageIdentity(message))
+    } catch (e) {
+        console.log('读取已入库消息指纹失败', e)
+    }
+    roomStoredIdentities.set(roomId, identities)
+    while (roomStoredIdentities.size > ROOM_STORED_IDENTITIES_LIMIT) {
+        const oldestRoomId = roomStoredIdentities.keys().next().value
+        if (oldestRoomId === undefined) break
+        roomStoredIdentities.delete(oldestRoomId)
+    }
+    return identities
 }
 
 // 群成员信息缓存
@@ -1442,6 +1480,11 @@ const adapter: typeof oicqAdapter = {
             let anchorFallbackTried = false
             // message_id 不稳定，改用 real_seq 记录本轮已拉到的消息，防止同一消息换 id 后被反复入库
             const fetchedIdentities = new Set<string>()
+            // 库里已存在的消息指纹，用来跳过重复入库并判断是否已经接上已有历史
+            const knownStoredIdentities = await getRoomStoredIdentities(roomId)
+            // 从某条历史消息往前翻时，一次只补一屏（20 条）新消息，避免把整个历史都拉一遍
+            const boundedByAnchor = messageSeq !== undefined
+            let newMessagesInCall = 0
             // 分页必须严格向更早的消息推进，否则说明锚点失效或服务端忽略了 message_seq
             let previousOldestRealSeq: number | undefined
             let previousOldestTime: number | undefined
@@ -1523,6 +1566,8 @@ const adapter: typeof oicqAdapter = {
                         try {
                             await processMessage(data.message, message, {}, roomId, true)
                             if (await storage.isChatIgnored(message.senderId)) message.hide = true
+                            // 库里已有同一条消息（message_id 可能已经变了），直接跳过，不再重复入库
+                            if (knownStoredIdentities.has(getStoredMessageIdentity(message))) continue
                             batchMessages.push(message)
                         } catch (e) {
                             console.error(e)
@@ -1531,15 +1576,22 @@ const adapter: typeof oicqAdapter = {
                     // 检查第一条消息是否已存在（在存储之前检查）
                     const firstMsg = batchMessages[0]
                     const firstMsgExists = firstMsg && (await storage.getMessage(roomId, firstMsg._id as string))
-                    // 边拉边存：每批消息立即存入数据库
+                    // 边拉边存：每批消息立即存入数据库，并按实际写入条数判断是否已接上库里已有的历史
+                    let addedCount = 0
                     if (batchMessages.length > 0) {
-                        await storage.addMessages(roomId, batchMessages)
-                        totalCount += batchMessages.length
+                        const added = await storage.addMessages(roomId, batchMessages)
+                        addedCount = Array.isArray(added) ? added.length : batchMessages.length
+                        totalCount += addedCount
+                        newMessagesInCall += addedCount
+                        for (const message of batchMessages)
+                            knownStoredIdentities.add(getStoredMessageIdentity(message))
                     }
                     if (reachedMinDate) break
                     if (history.messages.length === 0) break
-                    // 整页都是本轮已经拉取过的消息（即使 message_id 变了），说明分页回到了旧位置，正常结束
-                    if (batchMessages.length === 0) break
+                    // 整页都没有写入新消息（message_id 可能已变化），说明已接上已有的历史，正常结束
+                    if (batchMessages.length === 0 || addedCount === 0) break
+                    // 从指定消息往前翻时，补够一屏就停，返回的条数由调用方按已加载数量决定
+                    if (boundedByAnchor && newMessagesInCall >= 20) break
                     // NapCat 的 message_seq 是 MessageUnique 生成的短 id（MD5 前半段），
                     // 并非连续序号，不能减 1 后再用，否则下次查询会命中不存在的位置并抛「消息X不存在」。
                     // 使用本批时间最早一条的短 id 作为下一页锚点。
