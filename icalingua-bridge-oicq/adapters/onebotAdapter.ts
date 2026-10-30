@@ -200,7 +200,12 @@ const attachEventHandler = () => {
             userId: senderId,
         }
         ////process message////
-        await processMessage(data.message, message, lastMessage, roomId)
+        try {
+            await processMessage(data.message, message, lastMessage, roomId)
+        } catch (e) {
+            // 单个消息段解析失败时保留已解析的内容继续入库，避免整条消息丢失
+            console.error('处理消息失败', e)
+        }
 
         // 鬼知道服务器改了什么，收到的语言消息有时候没有 url，尝试重新获取
         if (message.content === '[无法处理的语音]undefined') {
@@ -1397,23 +1402,30 @@ const adapter: typeof oicqAdapter = {
         let totalCount = 0
         const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
         let reachedMinDate = false
-        let messageSeq: number | undefined = undefined
+        // 客户端传入的是已加载的最早一条消息 id；NapCat 的 message_id 与 message_seq 同为短 id，
+        // 直接作为起始分页点，避免每次都从最新消息重新拉取。
+        const initialSeq = Number(messageId)
+        let messageSeq: number | undefined = Number.isSafeInteger(initialSeq) && initialSeq > 0 ? initialSeq : undefined
+        let anchorFallbackTried = false
+        // 短 id 是随机值，不能靠大小判断是否前进；记录本轮已取到的消息 id 用于检测分页停滞
+        const fetchedMessageIds = new Set<string>()
         while (true) {
             if (stopFetching) {
                 stopFetching = false
                 break
             }
+            const startedFromLatest = messageSeq === undefined
             try {
                 const history = await (roomId > 0
                     ? bot.getPrivateMessageHistory(roomId, messageSeq)
                     : bot.getGroupMessageHistory(-roomId, messageSeq))
                 const batchMessages: Message[] = []
-                let minSeq = Number.MAX_SAFE_INTEGER
+                // 记录本批时间最早的一条，作为下一页的分页锚点
+                // （NapCat 的短 id 无大小顺序，不能像序号一样取最小值或减 1）
+                let oldestData: { time: number; message_seq?: number; message_id: number } | undefined
                 for (let i = 0; i < history.messages.length; i++) {
                     const data = history.messages[i]
-                    // 记录本批最早的 seq，用于下一页分页
-                    const seq = Number(data.message_seq)
-                    if (seq > 0 && seq < minSeq) minSeq = seq
+                    if (!oldestData || data.time < oldestData.time) oldestData = data
                     // 检查日期限制
                     if (minDate && data.time * 1000 < minDate) {
                         reachedMinDate = true
@@ -1468,14 +1480,34 @@ const adapter: typeof oicqAdapter = {
                 }
                 if (reachedMinDate) break
                 if (history.messages.length === 0 || batchMessages.length === 0) break
-                // 无有效 seq（整批都没有序号）或已到最早一条，停止分页
-                if (minSeq === Number.MAX_SAFE_INTEGER || minSeq <= 1) break
-                messageSeq = minSeq - 1
+                // NapCat 的 message_seq 是 MessageUnique 生成的短 id（MD5 前半段），
+                // 并非连续序号，不能减 1 后再用，否则下次查询会命中不存在的位置并抛「消息X不存在」。
+                // 使用本批时间最早一条的短 id 作为下一页锚点。
+                const nextSeq = Number(oldestData?.message_seq ?? oldestData?.message_id)
+                if (!Number.isSafeInteger(nextSeq) || nextSeq <= 0) break
+                // 用本批是否带来新消息判断分页是否前进，避免原地打转
+                const hasNewMessage = batchMessages.some((m) => !fetchedMessageIds.has(String(m._id)))
+                for (const m of batchMessages) fetchedMessageIds.add(String(m._id))
+                if (!hasNewMessage) break
+                messageSeq = nextSeq
                 //todo 所有消息都过一遍，数据库里面都有才能结束
-                if (firstMsgExists) break
+                // 仅从最新消息开始拉时，用它判断是否已接上库中已有历史；
+                // 显式从某条消息往前拉时，该消息本身就在库里，不能据此提前结束。
+                if (startedFromLatest && firstMsgExists) break
             } catch (e) {
+                const errorMessage = e instanceof Error ? e.message : String(e)
+                // NapCat 在历史到底时返回空列表并抛「消息X不存在」，按正常结束处理，不向客户端弹错误。
+                // 若首次传入的起始消息已失效（NapCat 重启后短 id 表重建），回退到从最新消息重新拉一次。
+                if (/消息.*不存在/.test(errorMessage)) {
+                    if (messageSeq !== undefined && !anchorFallbackTried && totalCount === 0) {
+                        anchorFallbackTried = true
+                        messageSeq = undefined
+                        continue
+                    }
+                    break
+                }
                 console.log(e)
-                clients.messageError('错误：' + e.message)
+                clients.messageError('错误：' + errorMessage)
                 break
             }
         }

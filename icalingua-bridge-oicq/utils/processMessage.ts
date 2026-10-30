@@ -209,8 +209,18 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                         if (!m.data.text && (m.data.qq == 0 || m.data.qq == 'all')) {
                             m.data.text = '@全体成员'
                         } else if (!m.data.text) {
-                            const info = await adapter._getGroupMemberInfo(Math.abs(roomId), m.data.qq as any, false)
-                            m.data.text = '@' + (info?.card || info?.nickname || String(m.data.qq))
+                            // 成员可能已退群/被踢，或 @ 指向其他群成员，查不到时退回 QQ 号，
+                            // 不能让整条消息因为一次成员查询失败而中断
+                            try {
+                                const info = await adapter._getGroupMemberInfo(
+                                    Math.abs(roomId),
+                                    m.data.qq as any,
+                                    false,
+                                )
+                                m.data.text = '@' + (info?.card || info?.nickname || String(m.data.qq))
+                            } catch {
+                                m.data.text = '@' + String(m.data.qq)
+                            }
                         }
                         if (!m.data.text || m.data.text === '@') m.data.text = `@${String(m.data.qq)}`
                     // noinspection FallThroughInSwitchStatementJS 确信
