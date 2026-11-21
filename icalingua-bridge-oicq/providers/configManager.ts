@@ -10,7 +10,7 @@ type Config = {
     port: number
     host: string
     unix?: string
-    onebot?: string
+    onebot?: string | { url: string; accessToken?: string }
     milky?: string | { url: string; accessToken?: string }
     fetchHistoryMinDate?: string
     tempDir?: string

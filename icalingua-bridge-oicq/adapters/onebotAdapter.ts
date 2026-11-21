@@ -661,11 +661,15 @@ const attachEventHandler = () => {
 }
 
 const refreshRkey = async () => {
-    const rkeyy = await bot.getRkey()
-    if (isArrayLike(rkeyy)) {
-        rkey = rkeyy
+    try {
+        const rkeyy = await bot.getRkey()
+        if (isArrayLike(rkeyy)) {
+            rkey = rkeyy
+        }
+        console.log('Rkey 已刷新', rkeyy)
+    } catch (e) {
+        console.warn('Rkey 刷新失败，继续沿用：', e instanceof Error ? e.message : e)
     }
-    console.log('Rkey 已刷新', rkeyy)
 }
 
 const replaceRkey = (url: string) => {
@@ -702,7 +706,10 @@ const adapter: typeof oicqAdapter = {
     migrateLegacyAtMessages: () => storage?.migrateLegacyAtMessages?.() || Promise.resolve(),
     loggedIn: false,
     async createBot(form: LoginForm) {
-        bot = new OnebotClient(config.onebot)
+        const onebotConfig = config.onebot
+        const onebotUrl = typeof onebotConfig === 'string' ? onebotConfig : onebotConfig.url
+        const onebotAccessToken = typeof onebotConfig === 'string' ? undefined : onebotConfig.accessToken
+        bot = new OnebotClient(onebotUrl, { accessToken: onebotAccessToken })
         await bot.connect()
         const loginInfo = await bot.getLoginInfo()
         uin = loginInfo.user_id
@@ -711,6 +718,17 @@ const adapter: typeof oicqAdapter = {
         loginForm.username = loginInfo.user_id
         await initStorage()
         attachEventHandler()
+        // 探测后端实现，用于兼容某后端实现上的差异（探测失败则按标准 OneBot v11 处理）
+        await bot
+            .detectBackend()
+            .then((backend) => {
+                console.log(
+                    `OneBot 后端：${backend.appName} ${backend.appVersion}${
+                        backend.isMeow ? 'Meow' : ''
+                    }`,
+                )
+            })
+            .catch((e) => console.warn('无法探测OneBot后端版本信息：', e instanceof Error ? e.message : e))
         adapter.loggedIn = true
         setInterval(() => void adapter.sendOnlineData().catch(console.error), 1000 * 60)
         userConfig.account = loginForm
@@ -985,13 +1003,20 @@ const adapter: typeof oicqAdapter = {
         }
 
         if (messageType === 'anonymous') {
-            if (roomId < 0)
+            if (roomId < 0) {
+                if (bot.isMeow) {
+                    clients.messageError('OneBot不支持匿名消息')
+                    clients.addMessageText(content)
+                    clients.closeLoading()
+                    return
+                }
                 chain.push({
                     type: 'anonymous',
                     data: {
                         ignore: false, //匿名失败时不继续发送
                     },
                 })
+            }
             messageType = 'text'
         }
 
@@ -1495,7 +1520,10 @@ const adapter: typeof oicqAdapter = {
     },
     async getCookies(domain: any, resolve) {
         const res = await bot.getCookies(domain)
-        bkn = Number(res.bkn)
+        // get_cookies 不返回 bkn，客户端已回退到 get_credentials/get_csrf_token，
+        // 仍取不到时兜底成 0，避免 bkn 变成 NaN
+        const parsedBkn = Number(res.bkn)
+        bkn = Number.isFinite(parsedBkn) ? parsedBkn : 0
         resolve(res.cookies)
     },
     async getRoamingStamp(no_cache: boolean | undefined, cb) {

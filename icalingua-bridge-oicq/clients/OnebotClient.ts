@@ -5,6 +5,70 @@ import WebSocket from 'ws'
 import ReconnectingWebSocket from 'reconnecting-websocket'
 
 const ONEBOT_API_TIMEOUT = 60 * 1000
+const HISTORY_PAGE_SIZE = 20
+
+/** 连接参数 */
+export type OneBotClientOptions = {
+    /** OneBot 服务端 access token，会拼接到 WebSocket URL 的查询串上 */
+    accessToken?: string
+}
+
+/** 探测到的后端信息 */
+export type OneBotBackendInfo = {
+    appName: string
+    appVersion: string
+    runtimeOs?: string
+    runtimeVersion?: string
+    isMeow: boolean
+}
+
+/** 下载 rkey（多个 OneBot 实现的字段名不同，这里归一化成同一种形状） */
+export type DownloadRkey = {
+    type: 'private' | 'group'
+    rkey: string
+    created_at: number
+    ttl: string
+}
+
+/** 群文件列表条目（Meow 用 file_size 而不是 size） */
+type GroupFileEntry = {
+    group_id: number
+    file_id: string
+    file_name: string
+    busid: number
+    size: number
+    upload_time: number
+    dead_time: number
+    modify_time: number
+    download_times: number
+    uploader: number
+    uploader_name: string
+    file_size?: number
+}
+
+type GroupFolderEntry = {
+    group_id: number
+    folder_id: string
+    folder: string
+    folder_name: string
+    create_time: string
+    creator: string
+    creator_name: string
+    total_file_count: string
+}
+
+type GroupFileList = {
+    files: GroupFileEntry[]
+    folders: GroupFolderEntry[]
+}
+
+const normalizeGroupFileList = (list: GroupFileList): GroupFileList => ({
+    files: (list?.files ?? []).map((file) => {
+        const size = Number(file.size)
+        return Number.isFinite(size) ? file : { ...file, size: Number(file.file_size) || 0 }
+    }),
+    folders: list?.folders ?? [],
+})
 
 type BaseEvent = {
     self_id: number
@@ -154,13 +218,61 @@ export default class extends EventEmitter<{
         }
     >()
 
-    public constructor(private readonly url: string) {
+    private backendInfo: OneBotBackendInfo | undefined
+    private backendInfoPromise: Promise<OneBotBackendInfo> | undefined
+
+    public constructor(private readonly url: string, private readonly options: OneBotClientOptions = {}) {
         super()
+    }
+
+    /** 已探测到的后端信息；未探测时为 undefined（此时按标准 OneBot v11 行为处理） */
+    public get backend() {
+        return this.backendInfo
+    }
+
+    public get isMeow() {
+        return this.backendInfo?.isMeow === true
+    }
+
+    /**
+     * 探测后端实现
+     */
+    public detectBackend() {
+        if (!this.backendInfoPromise) {
+            this.backendInfoPromise = this.getVersionInfo()
+                .then((info) => {
+                    const appName = String(info?.app_name ?? '')
+                    const backend: OneBotBackendInfo = {
+                        appName,
+                        appVersion: String(info?.app_version ?? ''),
+                        runtimeOs: info?.runtime_os,
+                        runtimeVersion: info?.runtime_version,
+                        isMeow: /meow/i.test(appName),
+                    }
+                    this.backendInfo = backend
+                    return backend
+                })
+                .catch((error) => {
+                    // 探测失败不缓存，允许下次重试
+                    this.backendInfoPromise = undefined
+                    throw error
+                })
+        }
+        return this.backendInfoPromise
+    }
+
+    /** 把 accessToken 拼进查询 */
+    private resolveUrl() {
+        const token = this.options.accessToken
+        if (!token) return this.url
+        if (/[?&]access_token=/.test(this.url)) return this.url
+        const separator = this.url.includes('?') ? '&' : '?'
+        return `${this.url}${separator}access_token=${encodeURIComponent(token)}`
     }
 
     public connect() {
         return new Promise((resolve) => {
-            this.socket = new ReconnectingWebSocket(this.url, [], {
+            this.socket = new ReconnectingWebSocket(this.resolveUrl(), [], {
                 WebSocket,
             })
             this.socket.onopen = resolve
@@ -279,21 +391,23 @@ export default class extends EventEmitter<{
         }>('get_login_info')
     public getVersionInfo = () =>
         this.callApi<{
-            app_name: 'go-cqhttp'
+            app_name: string
             app_version: string
-            app_full_name: string
-            protocol_version: string
-            coolq_edition: 'pro'
-            coolq_directory: string
-            'go-cqhttp': true
-            plugin_version: '4.15.0'
-            plugin_build_number: 99
-            plugin_build_configuration: 'release'
-            runtime_version: string
-            runtime_os: string
-            version: string
+            app_full_name?: string
+            protocol_version?: string
+            coolq_edition?: 'pro'
+            coolq_directory?: string
+            'go-cqhttp'?: true
+            plugin_version?: string
+            plugin_build_number?: number
+            plugin_build_configuration?: string
+            runtime_version?: string
+            runtime_os?: string
+            version?: string
             //当前登陆使用协议类型
-            protocol: number
+            protocol?: number
+            // 其他实现可能带更多字段
+            [key: string]: any
         }>('get_version_info')
     public getStatus = () =>
         this.callApi<{
@@ -344,7 +458,7 @@ export default class extends EventEmitter<{
                     time: 1595694393
                 },
             ]
-        }>('get_forward_msg', { message_id })
+        }>('get_forward_msg', { message_id, id: message_id })
     public sendGroupSign = (group_id: number) => this.callApi('send_group_sign', { group_id })
     public getGroupList = (no_cache = false) =>
         this.callApi<Awaited<ReturnType<typeof this.getGroupInfo>>[]>('get_group_list', { no_cache })
@@ -419,11 +533,23 @@ export default class extends EventEmitter<{
     public getGroupMessageHistory = (group_id: number, message_seq?: number) =>
         this.callApi<{
             messages: GroupMessage[]
-        }>('get_group_msg_history', { group_id, message_seq, reverseOrder: true })
+        }>('get_group_msg_history', {
+            group_id,
+            message_seq,
+            message_id: Number(message_seq) || 0,
+            count: HISTORY_PAGE_SIZE,
+            reverseOrder: true,
+        })
     public getPrivateMessageHistory = (user_id: number, message_seq?: number) =>
         this.callApi<{
             messages: PrivateMessage[]
-        }>('get_friend_msg_history', { user_id, message_seq, reverseOrder: true })
+        }>('get_friend_msg_history', {
+            user_id,
+            message_seq,
+            message_id: Number(message_seq) || 0,
+            count: HISTORY_PAGE_SIZE,
+            reverseOrder: true,
+        })
     public setGroupRemark = (group_id: number, remark: string) => {
         // not implemented
     }
@@ -432,35 +558,115 @@ export default class extends EventEmitter<{
     }
     public sendFriendPoke = (user_id: number) => this.callApi('send_poke', { user_id })
     public sendGroupPoke = (group_id: number, user_id: number) => this.callApi('send_poke', { user_id, group_id })
-    public getCookies = (domain: string) =>
-        this.callApi<{
+    public getCookies = async (domain: string) => {
+        const res = await this.callApi<{
             cookies: string
-            bkn: string
+            bkn?: string
+            token?: string | number
+            csrf_token?: string | number
         }>('get_cookies', { domain })
+        let bkn = res?.bkn ?? res?.token
+        if (bkn === undefined || bkn === null || bkn === '') {
+            try {
+                const credentials = await this.callApi<{ token?: string | number; csrf_token?: string | number }>(
+                    'get_credentials',
+                    { domain },
+                )
+                bkn = credentials?.token ?? credentials?.csrf_token
+            } catch (e) {
+                try {
+                    const csrf = await this.callApi<{ token?: string | number }>('get_csrf_token')
+                    bkn = csrf?.token
+                } catch (e2) {
+                    // 后端不支持时保持缺失，由适配器兜底成 0
+                }
+            }
+        }
+        return { ...res, cookies: res?.cookies ?? '', bkn }
+    }
     public getCustomStickers = () => this.callApi<string[]>('fetch_custom_face', { count: 1145141919 })
     public sendPrivateFile = (user_id: number, file: string, name: string) =>
         this.callApi('upload_private_file', { user_id, file, name })
-    public getRkey = () =>
-        this.callApi<
-            {
-                type: 'private' | 'group'
-                rkey: string
-                created_at: number
-                ttl: string
-            }[]
-        >('get_rkey')
+    /**
+     * 获取下载 rkey。
+     * 统一归一化成 { type: 'private' | 'group', rkey, created_at, ttl }。
+     */
+    public getRkey = async (): Promise<DownloadRkey[]> => {
+        try {
+            const list = await this.callApi<any>('get_rkey')
+            const rkeys = this.normalizeRkeyList(list)
+            if (rkeys.length) return rkeys
+        } catch (e) {
+            // 部分后端没有 get_rkey，继续尝试 get_rkey_server
+        }
+        const serverRkey = await this.callApi<{
+            expired_time?: number
+            private_rkey?: string
+            group_rkey?: string
+        }>('get_rkey_server')
+        return this.normalizeRkeyServer(serverRkey)
+    }
+
+    private normalizeRkeyType(type: any): 'private' | 'group' | undefined {
+        if (type === 'private' || type === 'group') return type
+        const numeric = Number(type)
+        // Meow：10 = 私聊，20 = 群聊
+        if (numeric === 10) return 'private'
+        if (numeric === 20) return 'group'
+        return undefined
+    }
+
+    private normalizeRkeyList(list: any): DownloadRkey[] {
+        const rkeys: DownloadRkey[] = []
+        for (const item of Array.isArray(list) ? list : []) {
+            if (!item || typeof item.rkey !== 'string' || !item.rkey) continue
+            const type = this.normalizeRkeyType(item.type)
+            if (!type) continue
+            rkeys.push({
+                type,
+                rkey: item.rkey,
+                created_at: Number(item.created_at ?? item.create_time ?? 0),
+                ttl: String(item.ttl ?? ''),
+            })
+        }
+        return rkeys
+    }
+
+    private normalizeRkeyServer(res: { expired_time?: number; private_rkey?: string; group_rkey?: string }) {
+        const rkeys: DownloadRkey[] = []
+        const createdAt = Math.floor(Date.now() / 1000)
+        const ttl = res?.expired_time ? String(Math.max(Math.floor(res.expired_time - createdAt), 0)) : ''
+        if (res?.private_rkey) rkeys.push({ type: 'private', rkey: res.private_rkey, created_at: createdAt, ttl })
+        if (res?.group_rkey) rkeys.push({ type: 'group', rkey: res.group_rkey, created_at: createdAt, ttl })
+        return rkeys
+    }
     public gfsMove = (
         group_id: number,
         file_id: string,
         current_parent_directory: string,
         target_parent_directory: string,
-    ) => this.callApi('move_group_file', { group_id, file_id, current_parent_directory, target_parent_directory })
+    ) =>
+        this.callApi('move_group_file', {
+            group_id,
+            file_id,
+            current_parent_directory,
+            target_parent_directory,
+            // Meow
+            parent_directory: current_parent_directory,
+            target_directory: target_parent_directory,
+        })
     public gfsRename = (group_id: number, file_id: string, current_parent_directory: string, new_name: string) =>
         this.callApi('rename_group_file', { group_id, file_id, current_parent_directory, new_name })
     public gfsUpload = (group_id: number, file: string, name: string, folder_id: string) =>
         this.callApi('upload_group_file', { group_id, file, name, folder_id })
     public gfsMkdir = (group_id: number, folder_name: string) =>
-        this.callApi('create_group_file_folder', { group_id, folder_name })
+        this.callApi('create_group_file_folder', {
+            group_id,
+            folder_name,
+            // Meow
+            name: folder_name,
+            parent_id: '/',
+        })
     public gfsDeleteFile = (group_id: number, file_id: string) =>
         this.callApi('delete_group_file', { group_id, file_id })
     public gfsDeleteFolder = (group_id: number, folder_id: string) =>
@@ -472,8 +678,8 @@ export default class extends EventEmitter<{
             used_space: 0
             total_space: 0
         }>('get_group_file_system_info', { group_id })
-    public gfsListRoot = (group_id: number) =>
-        this.callApi<{
+    public gfsListRoot = async (group_id: number) =>
+        normalizeGroupFileList(await this.callApi<{
             files: [
                 {
                     group_id: 0
@@ -501,9 +707,9 @@ export default class extends EventEmitter<{
                     total_file_count: 'string'
                 },
             ]
-        }>('get_group_root_files', { group_id })
-    public gfsListDir = (group_id: number, folder_id: string) =>
-        this.callApi<{
+        }>('get_group_root_files', { group_id }))
+    public gfsListDir = async (group_id: number, folder_id: string) =>
+        normalizeGroupFileList(await this.callApi<{
             files: [
                 {
                     group_id: 0
@@ -531,7 +737,12 @@ export default class extends EventEmitter<{
                     total_file_count: 'string'
                 },
             ]
-        }>('get_group_files_by_folder', { group_id, folder_id, file_count: 11451419 })
+        }>('get_group_files_by_folder', {
+            group_id,
+            folder_id,
+            file_count: 11451419,
+            count: 11451419,
+        }))
     public gfsDownloadUrl = (group_id: number, file_id: string) =>
         this.callApi<{
             url: 'string'

@@ -155,10 +155,12 @@ custom: false
 port: 6789
 
 # OneBot WebSocket 服务端地址
-onebot: 'ws://127.0.0.1:3001'
+onebot:
+  url: 'ws://127.0.0.1:3001'
+  # accessToken: 'replace-with-your-token'  # 可选
 ```
 
-当前 OneBot 配置项是一个字符串 URL，不支持 `onebot: { url: ..., accessToken: ... }` 这样的对象写法。适配器不会额外设置 `Authorization` 请求头；如果所使用的 OneBot 实现规定通过 URL 查询参数鉴权，可以按该实现的要求把参数拼到 URL 中，例如：
+如果所使用的 OneBot 实现规定通过 URL 查询参数鉴权，可以按该实现的要求把参数拼到 URL 中，例如：
 
 ```yaml
 onebot: 'ws://127.0.0.1:3001/?access_token=replace-with-your-token'
