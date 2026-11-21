@@ -1,8 +1,11 @@
 name: CI
 
 on:
-  - push
-  - workflow_dispatch
+  push:
+    paths:
+      - '.github/workflows/docker.yml'
+      - 'icalingua-bridge-oicq/**'
+  workflow_dispatch:
 
 jobs:
   install:
