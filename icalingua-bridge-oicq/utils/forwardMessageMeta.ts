@@ -34,7 +34,16 @@ const nonEmptyString = (value: unknown): string | undefined => {
     return trimmed ? trimmed : undefined
 }
 
-export const buildMilkyForwardJson = (data: MilkyForwardSegmentData): string => {
+// 合并转发卡片数据（与 Milky / OneBot forward 段共用的最小字段集）
+export type ForwardCardSegmentData = {
+    readonly resId: string
+    readonly title?: string | null
+    readonly preview?: readonly (string | null | undefined)[] | null
+    readonly summary?: string | null
+    readonly prompt?: string | null
+}
+
+export const buildForwardJson = (data: ForwardCardSegmentData): string => {
     const prompt = nonEmptyString(data.prompt) ?? DEFAULT_FORWARD_PROMPT
     const detail: {
         resid: string
@@ -42,7 +51,7 @@ export const buildMilkyForwardJson = (data: MilkyForwardSegmentData): string => 
         news?: ForwardNewsItem[]
         summary?: string
     } = {
-        resid: data.forward_id,
+        resid: data.resId,
     }
     const title = nonEmptyString(data.title)
     const summary = nonEmptyString(data.summary)
@@ -60,3 +69,12 @@ export const buildMilkyForwardJson = (data: MilkyForwardSegmentData): string => 
     }
     return JSON.stringify(payload)
 }
+
+export const buildMilkyForwardJson = (data: MilkyForwardSegmentData): string =>
+    buildForwardJson({
+        resId: data.forward_id,
+        title: data.title,
+        preview: data.preview,
+        summary: data.summary,
+        prompt: data.prompt,
+    })

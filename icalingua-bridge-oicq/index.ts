@@ -6,7 +6,8 @@ import milkyAdapter from './adapters/milkyAdapter'
 import { cleanupOnStartup, setTempDir } from './utils/uploadFileManager'
 
 process.on('unhandledRejection', (error) => {
-    console.error('UnhandledException: ', error)
+    // 打印 Error 的堆栈/消息
+    console.error('UnhandledException: ', error instanceof Error ? (error.stack ?? error.message) : error)
 })
 
 // 配置临时文件目录

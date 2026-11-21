@@ -212,6 +212,7 @@ export default class extends EventEmitter<{
     private readonly echoMap = new Map<
         string,
         {
+            action: string
             resolve: (result: any) => void
             reject: (result: any) => void
             timeout: NodeJS.Timeout
@@ -313,7 +314,9 @@ export default class extends EventEmitter<{
             if (data.status === 'ok') {
                 pending.resolve(data.data)
             } else {
-                pending.reject(data.msg + '\n' + data.wording)
+                // 看日志用
+                const reason = data.wording || data.msg || data.retcode || 'unknown error'
+                pending.reject(new Error(`${pending.action} 失败：${reason}`))
             }
             return
         } else if (data.post_type === 'message' || data.post_type === 'message_sent') {
@@ -347,7 +350,7 @@ export default class extends EventEmitter<{
                 const pending = this.takePendingRequest(echo)
                 pending?.reject(new Error(`OneBot API request timed out: ${action}`))
             }, ONEBOT_API_TIMEOUT)
-            this.echoMap.set(echo, { resolve, reject, timeout })
+            this.echoMap.set(echo, { action, resolve, reject, timeout })
             try {
                 this.socket.send(JSON.stringify({ action, params, echo }))
             } catch (error) {

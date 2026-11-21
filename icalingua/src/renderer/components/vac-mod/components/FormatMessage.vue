@@ -57,7 +57,12 @@ import ForwardMessageCard from './ForwardMessageCard'
 
 const path = require('path')
 
-import { createForwardOpenEvent, parseForwardCard, parseForwardResource } from '../utils/forwardMessage'
+import {
+    createForwardOpenEvent,
+    isStandaloneForwardText,
+    parseForwardCard,
+    parseForwardResource,
+} from '../utils/forwardMessage'
 import { formatMessageParts, padFaceId } from '../utils/messageFormatting'
 import { isExternalMessageUrl } from '../utils/messageMarkdown'
 
@@ -101,8 +106,10 @@ export default {
             return parseForwardResource(this.code)
         },
         forwardMessage() {
-            if (!this.code || !this.code.trim()) return undefined
-            return this.linkifiedMessage.find(this.isForwardMessage)
+            const part = this.linkifiedMessage.find(this.isForwardMessage)
+            if (!part) return undefined
+            if (this.code && this.code.trim()) return part
+            return isStandaloneForwardText(String(this.content), part) ? part : undefined
         },
     },
 

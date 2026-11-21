@@ -58,6 +58,14 @@ export function createForwardOpenEvent(
     return event
 }
 
+export function isStandaloneForwardText(
+    content: string,
+    part: { type?: string; value: string },
+): boolean {
+    const marker = part.type === 'nestedforward' ? '[NestedForward: ' : '[Forward: '
+    return content.trim() === `${marker}${part.value}]`
+}
+
 export function parseForwardCard(code: string | undefined): ForwardCardPreview {
     if (!code) return emptyForwardCard()
 

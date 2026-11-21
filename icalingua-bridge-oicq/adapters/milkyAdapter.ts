@@ -1689,7 +1689,9 @@ const adapter: typeof oicqAdapter = {
         if (!decoded) return
         const scene = decoded.type === 'group' ? 'group' : 'friend'
         const peerId = decoded.type === 'group' ? decoded.groupId : decoded.peerId
-        bot.markMessageAsRead(scene as any, peerId, decoded.messageSeq)
+        void bot.markMessageAsRead(scene as any, peerId, decoded.messageSeq).catch((e) => {
+            console.warn('标记已读失败：', e instanceof Error ? e.message : e)
+        })
     },
     async getCookies(domain: any, resolve) {
         try {

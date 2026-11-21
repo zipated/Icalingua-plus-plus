@@ -11,6 +11,7 @@ import formatDate from './formatDate'
 import { ImgPttElemPlus, MessageElemPlus } from '../types/MessageElemPlus'
 import sleep from './sleep'
 import { encodeIcalinguaAt } from './icalinguaAt'
+import { buildForwardJson } from './forwardMessageMeta'
 
 type LastMessageLike = {
     content?: string
@@ -779,9 +780,38 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                         }
                         break
                     // @ts-ignore
-                    case 'forward':
+                    case 'forward': {
                         lastMessage.content += '[Forward multiple messages]'
-                        message.content = `[Forward: ${(m as any).data.id}]`
+                        const forwardData: Record<string, any> = ((m as any).data ?? {}) as Record<string, any>
+                        const resId = String(
+                            forwardData.id ?? forwardData.res_id ?? forwardData.forward_id ?? '',
+                        ).trim()
+                        const forwardFileName = String(
+                            forwardData.file_name ?? forwardData.fileName ?? forwardData.uniseq ?? '',
+                        ).trim()
+                        if (!resId && forwardFileName) {
+                            // 没有 resid 时按嵌套转发处理
+                            message.content = `[NestedForward: ${forwardFileName}]`
+                            break
+                        }
+                        message.content = `[Forward: ${resId}]`
+                        // 有的后端只给resid，附合并转发卡片，客户端渲染成卡片并用resid拉取内容
+                        if (resId) {
+                            const preview = Array.isArray(forwardData.preview)
+                                ? (forwardData.preview as Array<string | null | undefined>)
+                                : Array.isArray(forwardData.news)
+                                  ? (forwardData.news as any[]).map((item) =>
+                                        typeof item === 'string' ? item : item?.text,
+                                    )
+                                  : undefined
+                            message.code = buildForwardJson({
+                                resId,
+                                title: forwardData.source ?? forwardData.title,
+                                preview,
+                                summary: forwardData.summary,
+                                prompt: forwardData.prompt,
+                            })
+                        }
                         if (Array.isArray((m as any).data.content)) {
                             try {
                                 const messages = []
@@ -807,6 +837,7 @@ const createProcessMessage = (adapter: typeof oicqAdapter) => {
                             }
                         }
                         break
+                    }
                     case 'qfile':
                         break
                     default:

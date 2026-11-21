@@ -672,6 +672,15 @@ const refreshRkey = async () => {
     }
 }
 
+// 看日志用
+const runAction = (label: string, promise: Promise<unknown>) => {
+    void promise.catch((e) => {
+        const reason = e instanceof Error ? e.message : String(e)
+        console.warn(`${label}失败：`, reason)
+        clients.messageError(`${label}失败：${reason}`)
+    })
+}
+
 const replaceRkey = (url: string) => {
     if (!rkey.length) return url
     if (!url) return url
@@ -1299,7 +1308,7 @@ const adapter: typeof oicqAdapter = {
         resolve(await adapter._getGroupMemberInfo(group, member, noCache))
     },
     setGroupNick(group: number, nick: string) {
-        bot.setGroupCard(group, uin, nick)
+        runAction('修改群名片', bot.setGroupCard(group, uin, nick))
     },
     async getGroupMembers(group: number, resolve) {
         try {
@@ -1321,7 +1330,12 @@ const adapter: typeof oicqAdapter = {
         }
     },
     reportRead(messageId: string): any {
-        bot.markMessageAsRead(Number(messageId))
+        // 客户端可能传回本地库里的历史id
+        const numericId = Number(messageId)
+        if (!Number.isInteger(numericId) || numericId === 0) return
+        void bot.markMessageAsRead(numericId).catch((e) => {
+            console.warn('标记已读失败：', e instanceof Error ? e.message : e)
+        })
     },
     async makeForward(
         fakes: FakeMessage | Iterable<FakeMessage>,
@@ -1352,11 +1366,11 @@ const adapter: typeof oicqAdapter = {
         }
     },
     setGroupBan(gin: number, uin: number, duration?: number): any {
-        if (uin === 0) bot.setGroupWholeBan(gin, duration > 0)
-        else bot.setGroupBan(gin, uin, duration)
+        if (uin === 0) runAction('全员禁言', bot.setGroupWholeBan(gin, duration > 0))
+        else runAction('禁言', bot.setGroupBan(gin, uin, duration))
     },
     setGroupAnonymousBan(gin: number, flag: string, duration?: number): any {
-        bot.setGroupAnonymousBan(gin, flag, duration)
+        runAction('禁言匿名用户', bot.setGroupAnonymousBan(gin, flag, duration))
     },
     setGroupRemark(gin: number, remark: string): any {
         bot.setGroupRemark(gin, remark)
@@ -1365,10 +1379,10 @@ const adapter: typeof oicqAdapter = {
         bot.setFriendRemark(uin, remark)
     },
     setGroupKick(gin: number, uin: number): any {
-        bot.setGroupKick(gin, uin)
+        runAction('移出群成员', bot.setGroupKick(gin, uin))
     },
     setGroupLeave(gin: number): any {
-        bot.setGroupLeave(gin)
+        runAction('退出群聊', bot.setGroupLeave(gin))
     },
     async getFriend(uin: number, resolve: (friend: FriendInfo) => any) {
         const list = await bot.getFriendList()
