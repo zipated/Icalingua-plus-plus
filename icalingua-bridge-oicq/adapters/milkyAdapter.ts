@@ -30,6 +30,8 @@ import {
     PrivateMessageEventData,
 } from 'oicq-icalingua-plus-plus'
 import Message from '@icalingua/types/Message'
+import type { MessageReactionRequest } from '@icalingua/types/Message'
+import { applyMessageReaction, notifyMessageSave } from '@icalingua/storage-providers/MessageReactions'
 import MessagePageOptions, { MessagePagination, MessageSearchPagination } from '@icalingua/types/MessagePage'
 import createProcessMessage, { registerSilkDecodeCompleter } from '../utils/processMessage'
 import { convertLegacyIcalinguaAt, decodeIcalinguaAtName, findIcalinguaAtMarkup } from '../utils/icalinguaAt'
@@ -62,10 +64,35 @@ let backendInfo = ''
 let loadingBackendInfo = false
 
 const sendOnlineState = (target?: Socket) =>
-    clients.sendOnlineData({ online: true, nick: nickname, uin, sysInfo: getSysInfo() + backendInfo, bkn: 0 }, target)
+    clients.sendOnlineData(
+        { online: true, nick: nickname, uin, sysInfo: getSysInfo() + backendInfo, bkn: 0, canSetMessageReaction: true },
+        target,
+    )
 let lastReceivedMessageInfo = {
     timestamp: 0,
     id: 0,
+}
+// 回应事件只带 message_seq，缓存已编好的消息 ID
+const groupMessageIds = new Map<string, string>()
+const rememberGroupMessageId = (groupId: number, seq: number, messageId: string) => {
+    if (groupMessageIds.size >= 5000) {
+        const oldest = groupMessageIds.keys().next().value
+        if (oldest !== undefined) groupMessageIds.delete(oldest)
+    }
+    groupMessageIds.set(`${groupId}:${seq}`, messageId)
+}
+const findGroupMessageId = async (groupId: number, seq: number): Promise<string | null> => {
+    const cached = groupMessageIds.get(`${groupId}:${seq}`)
+    if (cached) return cached
+    try {
+        const { message } = await bot.getMessage('group', groupId, seq)
+        const messageId = encodeGroupMessageId(groupId, Number(message.sender_id), seq, 0)
+        rememberGroupMessageId(groupId, seq, messageId)
+        return messageId
+    } catch (error) {
+        console.error('表情回应找不到对应消息：', error)
+        return null
+    }
 }
 const isOwnRoomName = (roomName: string | null): boolean => roomName === nickname || roomName === String(uin)
 
@@ -368,6 +395,7 @@ const attachEventHandler = () => {
         const messageId = isGroup
             ? encodeGroupMessageId(groupId, senderId, Number(data.message_seq), 0)
             : encodePrivateMessageId(Number(data.peer_id), Number(data.message_seq), 0, isSelfMsg)
+        if (isGroup && groupId !== undefined) rememberGroupMessageId(groupId, Number(data.message_seq), messageId)
 
         let senderName: string
         if (isGroup && isSelfMsg) {
@@ -486,7 +514,8 @@ const attachEventHandler = () => {
         clients.addMessage(room.roomId, message)
         await storage.updateRoom(roomId, room)
         clients.updateRoom(room)
-        storage.addMessage(roomId, message)
+        const saveMessage = storage.addMessage(roomId, message)
+        notifyMessageSave(storage, roomId, messageId, saveMessage).catch((error) => console.error(error))
     })
 
     bot.on('messageRecall', async (data) => {
@@ -498,6 +527,25 @@ const attachEventHandler = () => {
             : encodePrivateMessageId(Number(data.peer_id), Number(data.message_seq), 0, isSelf)
         clients.deleteMessage(messageId)
         storage.updateMessage(roomId, messageId, { deleted: true, reveal: false })
+    })
+
+    bot.on('groupMessageReaction', async (data) => {
+        const groupId = Number(data.group_id)
+        const seq = Number(data.message_seq)
+        const messageId = await findGroupMessageId(groupId, seq)
+        if (!messageId || !data.face_id) return
+        await applyMessageReaction(
+            storage,
+            -groupId,
+            messageId,
+            {
+                id: String(data.face_id),
+                type: data.reaction_type === 'emoji' ? 2 : 1,
+                set: data.is_add,
+                bySelf: Number(data.user_id) === uin,
+            },
+            clients.renewMessage,
+        )
     })
 
     bot.on('friendNudge', async (data) => {
@@ -1478,6 +1526,7 @@ const adapter: typeof oicqAdapter = {
                     const msgId = isGroup
                         ? encodeGroupMessageId(peerId, senderId, Number(msg.message_seq), 0)
                         : encodePrivateMessageId(peerId, Number(msg.message_seq), 0, isSelfMsg)
+                    if (isGroup) rememberGroupMessageId(peerId, Number(msg.message_seq), msgId)
                     let senderName: string
                     if (isGroup && msg.group_member) {
                         senderName = msg.group_member.card || msg.group_member.nickname || String(senderId)
@@ -1663,6 +1712,33 @@ const adapter: typeof oicqAdapter = {
         } else {
             await bot.sendGroupNudge(gin, uin)
         }
+    },
+    async setMessageReaction(request: MessageReactionRequest) {
+        const decoded = decodeMessageId(request.messageId)
+        if (decoded?.type !== 'group' || decoded.groupId !== -request.roomId || !decoded.messageSeq)
+            throw new Error('无法定位群消息')
+        if (!request.id || (request.type !== 1 && request.type !== 2) || typeof request.set !== 'boolean')
+            throw new Error('无效的表情回应')
+
+        await bot.sendGroupMessageReaction(
+            decoded.groupId,
+            decoded.messageSeq,
+            request.id,
+            request.type === 2 ? 'emoji' : 'face',
+            request.set,
+        )
+        await applyMessageReaction(
+            storage,
+            request.roomId,
+            String(request.messageId),
+            {
+                id: request.id,
+                type: request.type,
+                set: request.set,
+                bySelf: true,
+            },
+            clients.renewMessage,
+        )
     },
     reportRead(messageId: string) {
         const decoded = decodeMessageId(messageId)
@@ -2140,6 +2216,7 @@ const adapter: typeof oicqAdapter = {
                 role: message.role,
                 title: message.title,
                 files: [],
+                emoji_reactions: message.emoji_reactions,
             }
             try {
                 await processMessage(res.data.message, newMessage, {}, roomId)

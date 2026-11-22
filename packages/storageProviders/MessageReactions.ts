@@ -1,5 +1,5 @@
 import type Message from '@icalingua/types/Message'
-import type { MessageReactionRequest } from '@icalingua/types/Message'
+import type { MessageReaction, MessageReactionRequest } from '@icalingua/types/Message'
 import type StorageProvider from '@icalingua/types/StorageProvider'
 import type { Client, GroupReactionEventData } from 'oicq-icalingua-plus-plus'
 import { decodeMessageId } from './MessageId'
@@ -20,6 +20,39 @@ const pendingUpdates = new WeakMap<StorageProvider, Map<string, Promise<void>>>(
 const messageSaveWaiters = new WeakMap<StorageProvider, Map<string, () => void>>()
 const reactionMessageWaitMs = 30000
 
+// 与服务端 SetReaction 同规则：≤3 位是系统表情短 ID，更长是 unicode 码点
+export function reactionTypeFromId(id: string): number {
+    return id.length > 3 ? 2 : 1
+}
+
+export interface MessageReactionChange {
+    id: string
+    type: number
+    set: boolean
+    bySelf: boolean
+}
+
+function mergeReaction(
+    reactions: MessageReaction[] | undefined,
+    change: MessageReactionChange,
+    authoritativeCount?: number,
+): MessageReaction[] | null {
+    const list = [...(reactions ?? [])]
+    const index = list.findIndex((reaction) => reaction.type === change.type && reaction.id === change.id)
+    const current = list[index]
+    const is_clicked = change.bySelf ? change.set : (current?.is_clicked ?? false)
+    const delta = change.bySelf && !!current?.is_clicked === change.set ? 0 : change.set ? 1 : -1
+    const count = Number.isSafeInteger(authoritativeCount) ? Number(authoritativeCount) : (current?.count ?? 0) + delta
+    if (count <= 0) {
+        if (index < 0) return null
+        list.splice(index, 1)
+        return list
+    }
+    if (current?.count === count && current.is_clicked === is_clicked) return null
+    list[index < 0 ? list.length : index] = { id: change.id, type: change.type, count, is_clicked }
+    return list
+}
+
 export function readGroupReactions(data: object): Pick<Message, 'emoji_reactions'> {
     const group = data as { group_id?: number; emoji_reactions?: Message['emoji_reactions'] }
     if (!group?.group_id || !Array.isArray(group.emoji_reactions)) return {}
@@ -28,13 +61,25 @@ export function readGroupReactions(data: object): Pick<Message, 'emoji_reactions
     }
 }
 
+const notifyMessageSaved = (storage: StorageProvider, key: string, write: Promise<unknown>) =>
+    write.finally(() => messageSaveWaiters.get(storage)?.get(key)?.())
+
 export function notifyGroupMessageSave(
     storage: StorageProvider,
     groupId: number,
     seq: number,
     write: Promise<unknown>,
 ) {
-    return write.finally(() => messageSaveWaiters.get(storage)?.get(`${groupId}:${seq}`)?.())
+    return notifyMessageSaved(storage, `${groupId}:${seq}`, write)
+}
+
+export function notifyMessageSave(
+    storage: StorageProvider,
+    roomId: number,
+    messageId: string,
+    write: Promise<unknown>,
+) {
+    return notifyMessageSaved(storage, `${roomId}:${messageId}`, write)
 }
 
 async function getReactionMessage(
@@ -113,20 +158,37 @@ export function applyGroupReaction(
         const message = await getReactionMessage(storage, roomId, key, messageId, deadline)
         if (!message || message.deleted) return
 
-        const reactions = [...(message.emoji_reactions ?? [])]
-        const index = reactions.findIndex((reaction) => reaction.type === event.type && reaction.id === event.id)
-        const current = reactions[index]
-        const bySelf = event.user_id === selfId
-        const is_clicked = bySelf ? event.set : (current?.is_clicked ?? false)
-        const delta = bySelf && !!current?.is_clicked === event.set ? 0 : event.set ? 1 : -1
-        const count = Number.isSafeInteger(event.count) ? Number(event.count) : (current?.count ?? 0) + delta
-        if (count <= 0) {
-            if (index < 0) return
-            reactions.splice(index, 1)
-        } else {
-            if (current?.count === count && current.is_clicked === is_clicked) return
-            reactions[index < 0 ? reactions.length : index] = { id: event.id, type: event.type, count, is_clicked }
-        }
+        const reactions = mergeReaction(
+            message.emoji_reactions,
+            { id: event.id, type: event.type, set: event.set, bySelf: event.user_id === selfId },
+            event.count,
+        )
+        if (!reactions) return
+
+        const patch = { emoji_reactions: reactions }
+        await storage.updateMessage(roomId, message._id, patch)
+        publish(roomId, String(message._id), patch)
+    })
+}
+
+export function applyMessageReaction(
+    storage: StorageProvider,
+    roomId: number,
+    messageId: string,
+    change: MessageReactionChange,
+    publish: (roomId: number, messageId: string, patch: Partial<Message>) => void,
+    waitKey?: string,
+): Promise<void> {
+    if (!change.id || (change.type !== 1 && change.type !== 2)) return Promise.resolve()
+
+    const queueKey = `${roomId}:${messageId}`
+    const deadline = Date.now() + reactionMessageWaitMs
+    return enqueueReactionUpdate(storage, queueKey, async () => {
+        const message = await getReactionMessage(storage, roomId, waitKey ?? queueKey, messageId, deadline)
+        if (!message || message.deleted) return
+
+        const reactions = mergeReaction(message.emoji_reactions, change)
+        if (!reactions) return
 
         const patch = { emoji_reactions: reactions }
         await storage.updateMessage(roomId, message._id, patch)

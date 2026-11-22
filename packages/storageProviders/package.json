@@ -1,6 +1,6 @@
 {
   "name": "@icalingua/storage-providers",
   "scripts": {
-    "test": "node --require ts-node/register/transpile-only --test HistoryDedupe.test.ts"
+    "test": "node --require ts-node/register/transpile-only --test \"*.test.ts\""
   }
 }

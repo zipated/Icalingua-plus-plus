@@ -163,6 +163,7 @@ export interface GroupMessageReactionEvent {
     user_id: number
     message_seq: number
     face_id: string
+    reaction_type: 'face' | 'emoji'
     is_add: boolean
 }
 
@@ -493,6 +494,22 @@ export default class MilkyClient extends EventEmitter<MilkyClientEvents> {
             message_scene: messageScene,
             peer_id: Math.abs(peerId),
             message_seq: messageSeq,
+        })
+    }
+
+    async sendGroupMessageReaction(
+        groupId: number,
+        messageSeq: number,
+        reaction: string,
+        reactionType: 'face' | 'emoji',
+        isAdd: boolean,
+    ) {
+        return this.client.fetch('send_group_message_reaction', {
+            group_id: Math.abs(groupId),
+            message_seq: messageSeq,
+            reaction,
+            reaction_type: reactionType,
+            is_add: isAdd,
         })
     }
 

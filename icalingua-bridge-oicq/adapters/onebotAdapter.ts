@@ -31,6 +31,12 @@ import {
     Ret,
 } from 'oicq-icalingua-plus-plus'
 import Message from '@icalingua/types/Message'
+import type { MessageReactionRequest } from '@icalingua/types/Message'
+import {
+    applyMessageReaction,
+    notifyMessageSave,
+    reactionTypeFromId,
+} from '@icalingua/storage-providers/MessageReactions'
 import MessagePageOptions, { MessagePagination, MessageSearchPagination } from '@icalingua/types/MessagePage'
 import createProcessMessage, { registerSilkDecodeCompleter } from '../utils/processMessage'
 import { convertLegacyIcalinguaAt, decodeIcalinguaAtName, findIcalinguaAtMarkup } from '../utils/icalinguaAt'
@@ -63,7 +69,10 @@ let loadingOnlineStatus = false
 let loadingBackendInfo = false
 
 const sendOnlineState = (target?: Socket) =>
-    clients.sendOnlineData({ online, nick: nickname, uin, sysInfo: getSysInfo() + backendInfo, bkn: 0 }, target)
+    clients.sendOnlineData(
+        { online, nick: nickname, uin, sysInfo: getSysInfo() + backendInfo, bkn: 0, canSetMessageReaction: true },
+        target,
+    )
 
 // 群成员信息缓存
 const MEMBER_CACHE_TTL = 5 * 60 * 1000 // 5分钟
@@ -264,7 +273,8 @@ const attachEventHandler = () => {
         clients.addMessage(room.roomId, message)
         await storage.updateRoom(roomId, room)
         clients.updateRoom(room)
-        storage.addMessage(roomId, message)
+        const saveMessage = storage.addMessage(roomId, message)
+        notifyMessageSave(storage, roomId, String(data.message_id), saveMessage).catch((error) => console.error(error))
         if (config.custom && data.post_type === 'message') {
             try {
                 require('../custom').onMessage(data, bot)
@@ -624,6 +634,23 @@ const attachEventHandler = () => {
         storage.updateRoom(roomId, room)
         storage.addMessage(roomId, message)
     })
+    bot.on('groupMsgEmojiLike', (data) => {
+        const messageId = data.message_id === undefined || data.message_id === null ? null : String(data.message_id)
+        if (!data.group_id || !messageId) return
+        const set = typeof data.is_add === 'boolean' ? data.is_add : data.sub_type === 'add'
+        for (const like of data.likes ?? []) {
+            const id = String(like?.emoji_id ?? '')
+            if (!id) continue
+            applyMessageReaction(
+                storage,
+                -data.group_id,
+                messageId,
+                { id, type: reactionTypeFromId(id), set, bySelf: Number(data.user_id) === uin },
+                clients.renewMessage,
+            ).catch((error) => console.error(error))
+        }
+    })
+
     bot.on('friendAdd', async (data) => {
         const now = new Date(data.time * 1000)
         const senderId = data.user_id
@@ -1242,6 +1269,7 @@ const adapter: typeof oicqAdapter = {
                 anonymousId: message.anonymousId,
                 anonymousflag: message.anonymousflag,
                 bubble_id: message.bubble_id,
+                emoji_reactions: message.emoji_reactions,
             }
             try {
                 await processMessage(data.message, newMessage, {}, roomId)
@@ -1777,6 +1805,27 @@ const adapter: typeof oicqAdapter = {
             return
         }
         await bot.sendGroupPoke(gin, uin)
+    },
+    async setMessageReaction(request: MessageReactionRequest) {
+        if (request.roomId > 0) throw new Error('表情回应仅支持群消息')
+        const messageId = Number(request.messageId)
+        if (!Number.isSafeInteger(messageId)) throw new Error('无效的消息 ID')
+        if (!request.id || (request.type !== 1 && request.type !== 2) || typeof request.set !== 'boolean')
+            throw new Error('无效的表情回应')
+
+        await bot.setMsgEmojiLike(messageId, request.id, request.set)
+        await applyMessageReaction(
+            storage,
+            request.roomId,
+            String(request.messageId),
+            {
+                id: request.id,
+                type: request.type,
+                set: request.set,
+                bySelf: true,
+            },
+            clients.renewMessage,
+        )
     },
 
     // 本地动作

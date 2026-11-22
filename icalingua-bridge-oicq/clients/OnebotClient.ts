@@ -207,6 +207,20 @@ export default class extends EventEmitter<{
             user_id: number
         },
     ]
+    groupMsgEmojiLike: [
+        BaseEvent & {
+            post_type: 'notice'
+            notice_type: 'group_msg_emoji_like'
+            sub_type?: 'add' | 'remove'
+            is_add?: boolean
+            group_id: number
+            user_id: number
+            operator_id?: number
+            message_id?: number
+            message_seq?: number
+            likes: { emoji_id: string; count: number }[]
+        },
+    ]
 }> {
     private socket: ReconnectingWebSocket
     private readonly echoMap = new Map<
@@ -340,6 +354,8 @@ export default class extends EventEmitter<{
             this.emit('groupTitle', data)
         } else if (data.post_type === 'notice' && data.notice_type === 'friend_add') {
             this.emit('friendAdd', data)
+        } else if (data.post_type === 'notice' && data.notice_type === 'group_msg_emoji_like') {
+            this.emit('groupMsgEmojiLike', data)
         }
     }
 
@@ -513,6 +529,8 @@ export default class extends EventEmitter<{
             no_cache,
         })
     public markMessageAsRead = (message_id: number) => this.callApi('mark_msg_as_read', { message_id })
+    public setMsgEmojiLike = (message_id: number, emoji_id: string, set: boolean) =>
+        this.callApi('set_msg_emoji_like', { message_id, emoji_id, set })
     public sendGroupForwardMessage = (group_id: number, messages: { type: 'node'; data: any }[]) =>
         this.callApi<{
             message_id: number
