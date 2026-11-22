@@ -7,6 +7,7 @@ import { flashTransferRequest as runFlashTransferRequest } from '../utils/flashT
 import MongoStorageProvider from '@icalingua/storage-providers/MongoStorageProvider'
 import RedisStorageProvider from '@icalingua/storage-providers/RedisStorageProvider'
 import SQLStorageProvider from '@icalingua/storage-providers/SQLStorageProvider'
+import { dedupeHistoryBatch } from '@icalingua/storage-providers/HistoryDedupe'
 import {
     applyGroupReaction,
     notifyGroupMessageSave,
@@ -2453,6 +2454,7 @@ const adapter: OicqAdapter = {
             const messages = []
             let done = false
             let first_loop = true
+            let processedCount = 0
             while (true) {
                 if (stopFetching) {
                     stopFetching = false
@@ -2501,7 +2503,6 @@ const adapter: OicqAdapter = {
                     try {
                         const retData = await processMessage(data.message, message, {}, roomId)
                         if (await storage.isChatIgnored(message.senderId)) message.hide = true
-                        messages.push(message)
                         newMsgs.push(message)
                         if (first_loop && retData.message.time > lastMessageTime) {
                             lastMessage = Object.assign(Object.assign({}, retData.message), retData.lastMessage, {
@@ -2515,17 +2516,22 @@ const adapter: OicqAdapter = {
                     }
                 }
                 first_loop = false
+                // _id 跨适配器不通用，按 时间+发送者+内容 判重
+                const boundary = roomId < 0 ? newMsgs[0] : newMsgs.find((e) => e.senderId === bot.uin) || newMsgs[0]
+                const { fresh, boundaryStored } = await dedupeHistoryBatch(storage, roomId, newMsgs, { boundary })
+                messages.push(...fresh)
+                processedCount += newMsgs.length
                 ui.addHistoryCount(newMsgs.length, roomId)
                 if (history.data.length < 2 || newMsgs.length === 0) {
                     done = true
                     break
                 }
                 messageId = newMsgs[0]._id as string
-                if (await storage.getMessage(roomId, messageId)) {
+                if (boundaryStored) {
                     done = true
                     break
                 }
-                if (limit && messages.length > limit) break
+                if (limit && processedCount > limit) break
                 await sleep(100)
             }
             // 私聊消息去重

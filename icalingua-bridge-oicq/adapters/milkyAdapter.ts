@@ -5,6 +5,7 @@ import StorageProvider from '@icalingua/types/StorageProvider'
 import MongoStorageProvider from '@icalingua/storage-providers/MongoStorageProvider'
 import RedisStorageProvider from '@icalingua/storage-providers/RedisStorageProvider'
 import SQLStorageProvider from '@icalingua/storage-providers/SQLStorageProvider'
+import { dedupeHistoryBatch } from '@icalingua/storage-providers/HistoryDedupe'
 import { FavoriteRequest, FavoriteResponse } from '@icalingua/types/Favorites'
 import { broadcast, broadcastDatabaseUpgradeProgress } from '../providers/socketIoProvider'
 import MilkyClient, { IncomingMessage } from '../clients/MilkyClient'
@@ -1507,34 +1508,13 @@ const adapter: typeof oicqAdapter = {
                         console.error(e)
                     }
                 }
-                // 检查第一条消息是否已存在（在存储之前检查）
-                // 同时用 time=0 和 time=实际时间 两种格式查，兼容新旧消息
+                // _id 跨适配器不通用，按 时间+发送者+内容 判重
                 const firstMsg = batchMessages[0]
-                const firstRawMsg = history.messages[0]
-                let firstMsgExists = false
-                if (firstMsg && firstRawMsg) {
-                    const msgIdWithTime = isGroup
-                        ? encodeGroupMessageId(
-                              peerId,
-                              Number(firstRawMsg.sender_id),
-                              Number(firstRawMsg.message_seq),
-                              firstRawMsg.time,
-                          )
-                        : encodePrivateMessageId(
-                              peerId,
-                              Number(firstRawMsg.message_seq),
-                              firstRawMsg.time,
-                              Number(firstRawMsg.sender_id) === uin,
-                          )
-                    firstMsgExists = !!(
-                        (await storage.getMessage(roomId, firstMsg._id as string)) ||
-                        (await storage.getMessage(roomId, msgIdWithTime))
-                    )
-                }
+                const { fresh, boundaryStored } = await dedupeHistoryBatch(storage, roomId, batchMessages)
                 // 边拉边存：每批消息立即存入数据库
-                if (batchMessages.length > 0) {
-                    await storage.addMessages(roomId, batchMessages)
-                    totalCount += batchMessages.length
+                if (fresh.length > 0) {
+                    await storage.addMessages(roomId, fresh)
+                    totalCount += fresh.length
                 }
                 if (reachedMinDate) {
                     console.log('reachedMinDate break')
@@ -1545,8 +1525,8 @@ const adapter: typeof oicqAdapter = {
                     break
                 }
                 startSeq = Number(history.next_message_seq)
-                if (firstMsgExists) {
-                    console.log('firstMsg exists break', firstMsg._id)
+                if (boundaryStored) {
+                    console.log('history boundary stored break', firstMsg._id)
                     break
                 }
             }

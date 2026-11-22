@@ -5,6 +5,7 @@ import StorageProvider from '@icalingua/types/StorageProvider'
 import MongoStorageProvider from '@icalingua/storage-providers/MongoStorageProvider'
 import RedisStorageProvider from '@icalingua/storage-providers/RedisStorageProvider'
 import SQLStorageProvider from '@icalingua/storage-providers/SQLStorageProvider'
+import { dedupeHistoryBatch } from '@icalingua/storage-providers/HistoryDedupe'
 import { broadcast, broadcastDatabaseUpgradeProgress } from '../providers/socketIoProvider'
 import OnebotClient, { GroupMessage } from '../clients/OnebotClient'
 import Room from '@icalingua/types/Room'
@@ -1500,22 +1501,21 @@ const adapter: typeof oicqAdapter = {
                         console.error(e)
                     }
                 }
-                // 检查第一条消息是否已存在（在存储之前检查）
-                const firstOwnMsg =
+                // _id 跨适配器不通用，按 时间+发送者+内容 判重
+                const boundary =
                     roomId < 0
                         ? batchMessages[0] //群的话只要第一条消息就行
                         : batchMessages.find((e) => e.senderId == uin)
-                const firstMsgExists = firstOwnMsg && (await storage.getMessage(roomId, firstOwnMsg._id as string))
+                const { fresh, boundaryStored } = await dedupeHistoryBatch(storage, roomId, batchMessages, { boundary })
                 // 边拉边存：每批消息立即存入数据库
-                if (batchMessages.length > 0) {
-                    await storage.addMessages(roomId, batchMessages)
-                    totalCount += batchMessages.length
+                if (fresh.length > 0) {
+                    await storage.addMessages(roomId, fresh)
+                    totalCount += fresh.length
                 }
                 if (reachedMinDate) break
                 if (history.messages.length < 2 || batchMessages.length === 0) break
                 messageId = batchMessages[0]._id as string
-                //todo 所有消息都过一遍，数据库里面都有才能结束
-                if (!firstOwnMsg || firstMsgExists) break
+                if (!boundary || boundaryStored) break
             } catch (e) {
                 console.log(e)
                 clients.messageError('错误：' + e.message)

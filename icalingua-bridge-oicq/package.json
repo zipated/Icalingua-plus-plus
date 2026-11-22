@@ -14,7 +14,8 @@
         "copy-packages": "mkdir -p ./build/node_modules/@icalingua/storage-providers ./build/node_modules/@icalingua/types ./build/@icalingua && cp -af ../packages/storageProviders/build/. ./build/node_modules/@icalingua/storage-providers/ && cp -af ../packages/types/build/. ./build/node_modules/@icalingua/types/ && cp -af ./build/node_modules/@icalingua/. ./build/@icalingua/",
         "copy-packages:win": "mkdir .\\build\\node_modules && mkdir .\\build\\node_modules\\@icalingua && xcopy /e ..\\packages\\storageProviders\\build\\ .\\build\\node_modules\\@icalingua\\storage-providers\\ && xcopy /e ..\\packages\\types\\build\\ .\\build\\node_modules\\@icalingua\\types\\ && xcopy /e .\\build\\node_modules\\@icalingua\\ .\\build\\@icalingua\\",
         "detach-start": "screen -U pnpm start",
-        "dev": "NODE_ENV=development ts-node ."
+        "dev": "NODE_ENV=development ts-node .",
+        "test": "node -r ts-node/register/transpile-only tests/historyDedupe.test.cjs && node -r ts-node/register/transpile-only tests/meowForwardFormatting.test.cjs && node -r ts-node/register/transpile-only tests/milkyForwardFormatting.test.cjs && node -r ts-node/register/transpile-only tests/onebotApiFailure.test.cjs"
     },
     "devDependencies": {
         "@types/express": "^4.17.25",

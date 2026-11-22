@@ -7,6 +7,7 @@ import { flashTransferRequest as runFlashTransferRequest } from '../utils/flashT
 import MongoStorageProvider from '@icalingua/storage-providers/MongoStorageProvider'
 import RedisStorageProvider from '@icalingua/storage-providers/RedisStorageProvider'
 import SQLStorageProvider from '@icalingua/storage-providers/SQLStorageProvider'
+import { dedupeHistoryBatch } from '@icalingua/storage-providers/HistoryDedupe'
 import {
     applyGroupReaction,
     notifyGroupMessageSave,
@@ -2159,6 +2160,7 @@ const adapter = {
         console.log(`${roomId} 开始拉取消息`)
         clients.messageSuccess('开始拉取消息')
         const messages = []
+        let totalFresh = 0
         let lastMessage = {}
         let lastMessageTime = 0
         const minDate = config.fetchHistoryMinDate ? new Date(config.fetchHistoryMinDate).getTime() : null
@@ -2223,18 +2225,18 @@ const adapter = {
                     console.error(e)
                 }
             }
-            // 检查第一条消息是否已存在（在存储之前检查）
+            // _id 跨适配器不通用，按 时间+发送者+内容 判重
             const firstMsgId = batchMessages[0]?._id as string
-            const firstMsgExists = firstMsgId && (await storage.getMessage(roomId, firstMsgId))
+            const { fresh, boundaryStored } = await dedupeHistoryBatch(storage, roomId, batchMessages)
             // 边拉边存：每批消息立即存入数据库
-            if (batchMessages.length > 0) {
-                await storage.addMessages(roomId, batchMessages)
+            if (fresh.length > 0) {
+                totalFresh += fresh.length
+                await storage.addMessages(roomId, fresh)
             }
             if (reachedMinDate) break
             if (history.data.length < 2 || batchMessages.length === 0) break
             messageId = firstMsgId
-            //todo 所有消息都过一遍，数据库里面都有才能结束
-            if (firstMsgExists) break
+            if (boundaryStored) break
             await sleep(100)
         }
         // 私聊消息去重
@@ -2266,9 +2268,9 @@ const adapter = {
                 }
             }
         }
-        console.log(`${roomId} 已拉取 ${messages.length} 条消息`)
+        console.log(`${roomId} 已拉取 ${totalFresh} 条消息`)
         let room = await storage.getRoom(roomId)
-        clients.messageSuccess(`${room.roomName}(${Math.abs(roomId)}) 已拉取 ${messages.length} 条消息`)
+        clients.messageSuccess(`${room.roomName}(${Math.abs(roomId)}) 已拉取 ${totalFresh} 条消息`)
         storage
             .fetchMessages(roomId, {}, currentLoadedMessagesCount + 20)
             .then((messages) => clients.setMessages(roomId, messages))
